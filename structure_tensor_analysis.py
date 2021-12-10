@@ -10,7 +10,7 @@ import matplotlib
 def rgb2gray(rgb):
     return np.dot(rgb[...,:], [0.2989, 0.5870, 0.1140])
 
-img = 'cityscape.jpg'
+img = 'pygmy_goats.jpg'
 
 I = io.imread(img)
 if len(I.shape) == 3:
@@ -34,12 +34,22 @@ S = np.stack((gaussian_filter(I_x_sq, 3), gaussian_filter(I_xy, 3),
 
 # construct anisotropy index, AI
 d,v = np.linalg.eig(S.reshape((I.shape[0],I.shape[1],2,2)))
+
+# get only principle eigenvectors
+max_idx = np.abs(d).argmax(axis=-1)
+max_idx = np.ravel(max_idx)
+max_idx = np.array([np.arange(max_idx.shape[0]), max_idx])
+v = np.transpose(v, axes=(0,1,3,2)).reshape(-1,2,2)
+v = v[max_idx[0],max_idx[1]].reshape(I.shape[0],-1,2)
+
+theta = ((np.arctan(v[...,1] / v[...,0])) + np.pi / 2) / np.pi
+# %%
 AI = abs(d[...,0] - d[...,1]) / (d[...,0] + d[...,1])
 
 # get primary orientation, theta
 # TODO: this may not be quite what we want (color cycles every pi/2 rather than every pi)
-theta = 0.5 * np.arctan(2 * S[...,1] / (S[...,3] - S[...,0]))
-theta = theta * 2 / np.pi + 0.5
+# theta = 0.5 * np.arctan(2 * S[...,1] / (S[...,3] - S[...,0]))
+# theta = theta * 2 / np.pi + 0.5
 
 # make hsv image where hue= primary orientation, saturation= anisotropy, value= original image
 stack = np.stack([theta,AI,I],axis=-1)
