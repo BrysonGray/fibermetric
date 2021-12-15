@@ -1,18 +1,22 @@
 # %%
 from scipy.ndimage import gaussian_filter, sobel
+from PIL import Image
+Image.MAX_IMAGE_PIXELS = None # This is necessary for loading large images with skimage
 from skimage import color
 from skimage import io
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
-
 # %%
 def rgb2gray(rgb):
     return np.dot(rgb[...,:], [0.2989, 0.5870, 0.1140])
 
 img = 'cityscape.jpg'
+# img = '/Users/brysongray/structure_tensor_analysis/m1229_other_data/M1229-N94--_1_0160.jp2'
 
 I = io.imread(img)
+
+# %%
 if len(I.shape) == 3:
     I = rgb2gray(I)
 # fit I to range (0,1)
@@ -29,8 +33,11 @@ I_x = sobel(I, axis=1)
 I_y_sq = I_y**2
 I_x_sq = I_x**2
 I_xy = I_x*I_y
-S = np.stack((gaussian_filter(I_x_sq, 3), gaussian_filter(I_xy, 3),
-    gaussian_filter(I_xy, 3), gaussian_filter(I_y_sq, 3)), axis=-1)
+S = np.stack((gaussian_filter(I_x_sq, 1), gaussian_filter(I_xy, 1),
+    gaussian_filter(I_xy, 1), gaussian_filter(I_y_sq, 1)), axis=-1)
+
+# S = gaussian_filter(np.stack((I_x_sq, I_xy,
+#     I_xy, I_y_sq), axis=-1), 1)
 
 # construct anisotropy index, AI
 d,v = np.linalg.eig(S.reshape((I.shape[0],I.shape[1],2,2)))
@@ -69,4 +76,5 @@ plt.imshow(hsv)
 plt.title('hsv')
 
 plt.show()
+
 # %%
