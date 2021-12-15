@@ -10,7 +10,7 @@ import matplotlib
 def rgb2gray(rgb):
     return np.dot(rgb[...,:], [0.2989, 0.5870, 0.1140])
 
-img = 'pygmy_goats.jpg'
+img = 'cityscape.jpg'
 
 I = io.imread(img)
 if len(I.shape) == 3:
