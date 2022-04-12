@@ -218,10 +218,7 @@ def main():
     parser.add_argument('-A', '--affine', help=".txt file storing rigid 3x3 transformation matrix")
     args = parser.parse_args()
     
-    # TODO: producing the hsv image requires the original image whether S was computed previously or not. Need to figure out how to deal with this.
     image = args.image
-    # if the image is a directory, assume S has been computed previously and output theta, AI and hsv.
-    isdir = os.path.splitext(image)[-1] == ''
 
     if args.out:
         out = args.out
@@ -230,38 +227,32 @@ def main():
     else:
         out = os.getcwd()
     
-    # if it is not a directory, first save out xx, yy, and xy
-    if not isdir:
-        if args.affine:
-            with open(args.affine, 'rt') as f:
-                A = read_matrix_data(f)
-        img_down = args.img_down
-        sigma = args.sigma
-        down = args.down
-        reverse_intensity = args.reverse_intensity
+    if args.affine:
+        with open(args.affine, 'rt') as f:
+            A = read_matrix_data(f)
 
-        I = load_img(image, img_down, reverse_intensity)
-        S, theta, AI, hsv = struct_tensor(I, sigma, down)
+    img_down = args.img_down
+    sigma = args.sigma
+    down = args.down
+    reverse_intensity = args.reverse_intensity
 
-        # save out image(s)
-        base = os.path.splitext(os.path.split(image)[1])[0]
-        xx_name = base + '_xx.h5'
-        yy_name = base + '_yy.h5'
-        xy_name = base + '_xy.h5'
+    I = load_img(image, img_down, reverse_intensity
+    S, theta, AI, hsv = struct_tensor(I, sigma, down)
 
-        with h5py.File(os.path.join(out, xx_name), 'w') as f:
-            f.create_dataset('xx', data=S[..., 0])
-        with h5py.File(os.path.join(out, yy_name), 'w') as f:
-            f.create_dataset('yy', data=S[..., 3])
-        with h5py.File(os.path.join(out, xy_name), 'w') as f:
-            f.create_dataset('xy', data=S[..., 1])
+    # save out image(s)
+    base = os.path.splitext(os.path.split(image)[1])[0]
+    xx_name = base + '_xx.h5'
+    yy_name = base + '_yy.h5'
+    xy_name = base + '_xy.h5'
 
-    if isdir:
+    with h5py.File(os.path.join(out, xx_name), 'w') as f:
+        f.create_dataset('xx', data=S[..., 0])
+    with h5py.File(os.path.join(out, yy_name), 'w') as f:
+        f.create_dataset('yy', data=S[..., 3])
+    with h5py.File(os.path.join(out, xy_name), 'w') as f:
+        f.create_dataset('xy', data=S[..., 1])
 
-        S = construct_S(xx, yy, xy, A)
-        # get the base file name from the existing files
-        base = os.listdir(image)[0][:-6]
-    if args.all or isdir:
+    if args.all:
         name = base + '_theta.png'
         cv2.imwrite(os.path.join(out, name), (theta*255).astype(np.uint8), [cv2.IMWRITE_PNG_COMPRESSION, 0])
         name = base + '_AI.png'
