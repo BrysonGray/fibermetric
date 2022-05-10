@@ -1,7 +1,5 @@
 # %%
 from pickletools import uint8
-import struct
-from turtle import shape
 from scipy.ndimage import gaussian_filter, sobel
 from torch.nn.functional import grid_sample
 import os
@@ -71,7 +69,7 @@ def construct_S(xx, yy, xy, down=0, A=None):
     
     # transform structure tensors
     if A is not None:
-        S = np.transpose(np.linalg.inv(A[:2,:2])) @ S @ np.linalg.inv(A[:2,:2]) 
+        S = A[:2,:2] @ S @ np.transpose(A[:2,:2])  # transform structure tensors
     
     return S
 
@@ -236,22 +234,26 @@ def main():
     down = args.down
     reverse_intensity = args.reverse_intensity
 
-    I = load_img(image, img_down, reverse_intensity
+    I = load_img(image, img_down, reverse_intensity)
     S, theta, AI, hsv = struct_tensor(I, sigma, down)
 
-    # save out image(s)
+    # save out structure tensor field
     base = os.path.splitext(os.path.split(image)[1])[0]
-    xx_name = base + '_xx.h5'
-    yy_name = base + '_yy.h5'
-    xy_name = base + '_xy.h5'
+    S_name = base + '_S.h5'
+    with h5py.File(os.path.join(out, S_name), 'w') as f:
+            f.create_dataset('S', data=S)
+    # xx_name = base + '_xx.h5'
+    # yy_name = base + '_yy.h5'
+    # xy_name = base + '_xy.h5'
 
-    with h5py.File(os.path.join(out, xx_name), 'w') as f:
-        f.create_dataset('xx', data=S[..., 0])
-    with h5py.File(os.path.join(out, yy_name), 'w') as f:
-        f.create_dataset('yy', data=S[..., 3])
-    with h5py.File(os.path.join(out, xy_name), 'w') as f:
-        f.create_dataset('xy', data=S[..., 1])
+    # with h5py.File(os.path.join(out, xx_name), 'w') as f:
+    #     f.create_dataset('xx', data=S[..., 0])
+    # with h5py.File(os.path.join(out, yy_name), 'w') as f:
+    #     f.create_dataset('yy', data=S[..., 3])
+    # with h5py.File(os.path.join(out, xy_name), 'w') as f:
+    #     f.create_dataset('xy', data=S[..., 1])
 
+    # save out images
     if args.all:
         name = base + '_theta.png'
         cv2.imwrite(os.path.join(out, name), (theta*255).astype(np.uint8), [cv2.IMWRITE_PNG_COMPRESSION, 0])
@@ -264,44 +266,3 @@ def main():
 #%%
 if __name__ == "__main__":
     main()
-
-# #%%
-
-# I_file = '/home/brysongray/data/m1229/m1229_other_data/M1229-M94--_1_0160.jp2'
-
-# I = load_img(I_file, reverse_intensity=True)
-
-# S1, theta, AI = struct_tensor(I, down=32)
-
-# # #%%
-# # xx_file = '/home/brysongray/structure_tensor_analysis/test_3-15/M1229-M94--_1_0160_xx.jp2'
-# # yy_file = '/home/brysongray/structure_tensor_analysis/test_3-15/M1229-M94--_1_0160_yy.jp2'
-# # xy_file = '/home/brysongray/structure_tensor_analysis/test_3-15/M1229-M94--_1_0160_xy.jp2'
-# # xx = cv2.imread(xx_file, cv2.IMREAD_GRAYSCALE)/255
-# # yy = cv2.imread(yy_file, cv2.IMREAD_GRAYSCALE)/255
-# # xy = cv2.imread(xy_file, cv2.IMREAD_GRAYSCALE)/255
-
-# # #%%
-# # S2 = construct_S(xx,yy,xy)
-
-# #%%
-# import os
-# import h5py
-
-# out = '/home/brysongray/structure_tensor_analysis/test2_3-18'
-# if not os.path.exists(out):
-#     os.makedirs(out)
-# xx_name = 'M1229-M94--_1_0160_xx.h5'
-
-# with h5py.File(os.path.join(out, xx_name), 'w') as f:
-#         f.create_dataset('xx', data=S1[..., 0])
-# # cv2.imwrite(os.path.join(out, xx_name), (xx*255).astype(np.uint8), [cv2.IMWRITE_PNG_COMPRESSION, 0])
-# # %%
-# xx_file = '/home/brysongray/structure_tensor_analysis/test2_3-18/M1229-M94--_1_0160_xx.h5'
-
-# with h5py.File(xx_file, 'r') as f:
-#     xx_ = f['xx'][:]
-
-# np.allclose(xx_, S1[..., 0])
-# # xx_ = cv2.imread(xx_file, cv2.IMREAD_GRAYSCALE)/255
-# # %%
