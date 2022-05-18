@@ -525,3 +525,78 @@ for i in range(0,Jd.shape[0],d):
 # ax.set_zlim(ax.get_xlim())
 # # f.savefig('ch9-ellipses-1.png')
 # %%
+import numpy as np
+import nibabel as nib
+import emlddmm
+from emlddmm import read_data, interp
+import matplotlib.pyplot as plt
+#%%
+
+def read_dti(dti_path):
+    T_ = nib.load(dti_path)
+    # get tensor data
+    T = T_.get_fdata()
+    # # get tensor data coordinates
+    T_head = T_.header
+    dim = T_head['dim'][1:4]
+    pixdim = T_head['pixdim'][1:4]
+
+    xT = []
+    for i in range(3):
+        x = (np.arange(dim[i]) - (dim[i]-1)/2) * pixdim[i]
+        xT.append(x)
+    
+    # Ts = []
+    # for i in range(6):
+    #     # Resample components of the tensor field at transformed points
+    #     x = interp(xT, T[...,i][None], X)
+    #     Ts.append(x)
+
+    # T has the 6 unique elements of the symmetric positive-definite diffusion tensors.
+    # The lower triangle of the matrix must be filled and last 2 dimensions reformed into 3x3 tensors.
+    T = np.stack((T[...,0],T[...,3],T[...,4],T[...,3],T[...,1],T[...,5],T[...,4],T[...,5],T[...,2]), axis=-1)
+    T = T.reshape(T.shape[:-1]+(3,3)) # result is row x col x slice x 3x3
+    
+    return xT, T
+
+def visualize(T,xT, fig=None):
+    """ Visualize DTI
+
+    Visualize diffusion tensor images with RGB encoded tensor orientations.
+    
+    Parameters
+    ----------
+    T: numpy array
+        Diffusion tensor volume with the last two dimensions being 3x3 containing tensor components.
+    """
+    # Get tensor principle eigenvectors
+    w, e = np.linalg.eigh(T)
+    princ_eig = e[...,-1]
+    # scale values from 0 to 1
+    princ_eig = (princ_eig - np.min(princ_eig)) / (np.max(princ_eig) - np.min(princ_eig))
+    # transpose to C x nslice x nrow x ncol
+    princ_eig = princ_eig.transpose(3,0,1,2)
+    # visualize
+    emlddmm.draw(princ_eig, xJ=xT, fig=fig, n_slices=7)
+
+    return princ_eig
+#%%
+
+dti_path = '/home/brysongray/structure_tensor_analysis/dki/dki_tensor.nii.gz'
+
+# T_ = nib.load(dti_path)
+# # get tensor data
+# T = T_.get_fdata()
+
+xT, T = read_dti(dti_path)
+
+fig = plt.figure(figsize=(10,10))
+eigs = visualize(T,xT,fig=fig)
+emlddmm.write_vtk_data('dki_tensor_directions.vtk', xT, eigs, 'dki_tensor_directions')
+# w, e = np.linalg.eigh(T)
+# princ_eig = e[...,-1]
+# %%
+img_path = '/home/brysongray/structure_tensor_analysis/dki_tensor_directions.vtk'
+
+img = emlddmm.read_vtk_data(img_path)
+# %%
