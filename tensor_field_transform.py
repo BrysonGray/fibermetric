@@ -1,7 +1,7 @@
 import numpy as np
 import nibabel as nib
 import argparse
-from emlddmm import read_data, interp
+from emlddmm import read_data, interp, draw
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -56,6 +56,7 @@ def ppd(tensors,J):
     Q = R2 @ R1
 
     return Q
+    
 
 # TODO: finite strain
 def fs(J):
@@ -63,20 +64,90 @@ def fs(J):
 
     return Q
 
-def visualize(T):
+
+def read_dti(dti_path):
+    T_ = nib.load(dti_path)
+    # get tensor data
+    T = T_.get_fdata()
+    # # get tensor data coordinates
+    T_head = T_.header
+    dim = T_head['dim'][1:4]
+    pixdim = T_head['pixdim'][1:4]
+
+    xT = []
+    for i in range(3):
+        x = (np.arange(dim[i]) - (dim[i]-1)/2) * pixdim[i]
+        xT.append(x)
+    
+    # Ts = []
+    # for i in range(6):
+    #     # Resample components of the tensor field at transformed points
+    #     x = interp(xT, T[...,i][None], X)
+    #     Ts.append(x)
+
+    # T has the 6 unique elements of the symmetric positive-definite diffusion tensors.
+    # The lower triangle of the matrix must be filled and last 2 dimensions reformed into 3x3 tensors.
+    T = np.stack((T[...,0],T[...,3],T[...,4],T[...,3],T[...,1],T[...,5],T[...,4],T[...,5],T[...,2]), axis=-1)
+    T = T.reshape(T.shape[:-1]+(3,3)) # result is row x col x slice x 3x3
+    
+    return xT, T
+
+
+def interp_dti(T, xT, X):
+    """ Interpolate DTI
+
+    """
+    if len(T.shape) == 5: # assume 3x3 tensors along last dimensions
+        T = np.stack((T[...,0,0],T[...,1,1],T[...,2,2],T[...,0,1],T[...,0,2],T[...,1,2]),-1)
+    elif T.shape[-1] != 6:
+        raise Exception("T must contain 3x3 tensors or 6 diffusion components in last dimension") 
+    Tnew = []
+    for i in range(6):
+        # Resample components of the tensor field at transformed points
+        x = interp(xT, T[...,i][None], X)
+        Tnew.append(x)
+    
+    Tnew = np.stack((Tnew[...,0], Tnew[...,3], Tnew[...,4], Tnew[...,3], Tnew[...,1], Tnew[...,5], Tnew[...,4], Tnew[...,5], Tnew[...,2]), axis=-1)
+    Tnew = Tnew.reshape(Tnew.shape[:-1]+(3,3)) # result is row x col x slice x 3x3
+
+    return Tnew
+
+
+def visualize(T,xT, **kwargs):
     """ Visualize DTI
 
     Visualize diffusion tensor images with RGB encoded tensor orientations.
     
     Parameters
     ----------
-    T: numpy array
+    T : numpy array
         Diffusion tensor volume with the last two dimensions being 3x3 containing tensor components.
-    """
+    xT : list
+        A list of 3 numpy arrays.  xT[i] contains the positions of voxels
+        along axis i.  Note these are assumed to be uniformly spaced. The default
+        is voxels of size 1.0.
+    kwargs : dict
+        Other keywords will be passed on to the emlddmm draw function. For example
+        include cmap='gray' for a gray colormap
     
+    Returns
+    -------
+    img : numpy array
+        4 dimensional array with the first dimension containing color channel components corresponding
+        to principal eigenvector orientations.
+    """
     # Get tensor principle eigenvectors
-    # map tensor principle eigenvector directions to RGB
-    return
+    w, e = np.linalg.eigh(T)
+    princ_eig = e[...,-1]
+    # scale values from 0 to 1
+    princ_eig = (princ_eig - np.min(princ_eig)) / (np.max(princ_eig) - np.min(princ_eig))
+    # transpose to C x nslice x nrow x ncol
+    img = princ_eig.transpose(3,0,1,2)
+    # visualize
+    draw(princ_eig, xJ=xT, **kwargs)
+
+    return img
+
 
 def main():
     # parse arguments

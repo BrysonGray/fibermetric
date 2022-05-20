@@ -559,15 +559,47 @@ def read_dti(dti_path):
     
     return xT, T
 
-def visualize(T,xT, fig=None):
+def interp_dti(T, xT, X):
+    """ Interpolate DTI
+
+    """
+    if len(T.shape) == 5: # assume 3x3 tensors along last dimensions
+        T = np.stack((T[...,0,0],T[...,1,1],T[...,2,2],T[...,0,1],T[...,0,2],T[...,1,2]),-1)
+    elif T.shape[-1] != 6:
+        raise Exception("T must contain 3x3 tensors or 6 diffusion components in last dimension") 
+    Tnew = []
+    for i in range(6):
+        # Resample components of the tensor field at transformed points
+        x = interp(xT, T[...,i][None], X)
+        Tnew.append(x)
+    
+    Tnew = np.stack((Tnew[...,0], Tnew[...,3], Tnew[...,4], Tnew[...,3], Tnew[...,1], Tnew[...,5], Tnew[...,4], Tnew[...,5], Tnew[...,2]), axis=-1)
+    Tnew = Tnew.reshape(Tnew.shape[:-1]+(3,3)) # result is row x col x slice x 3x3
+
+    return Tnew
+
+def visualize(T,xT, **kwargs):
     """ Visualize DTI
 
     Visualize diffusion tensor images with RGB encoded tensor orientations.
     
     Parameters
     ----------
-    T: numpy array
+    T : numpy array
         Diffusion tensor volume with the last two dimensions being 3x3 containing tensor components.
+    xT : list
+        A list of 3 numpy arrays.  xT[i] contains the positions of voxels
+        along axis i.  Note these are assumed to be uniformly spaced. The default
+        is voxels of size 1.0.
+    kwargs : dict
+        Other keywords will be passed on to the emlddmm draw function. For example
+        include cmap='gray' for a gray colormap
+    
+    Returns
+    -------
+    img : numpy array
+        4 dimensional array with the first dimension containing color channel components corresponding
+        to principal eigenvector orientations.
     """
     # Get tensor principle eigenvectors
     w, e = np.linalg.eigh(T)
@@ -575,11 +607,11 @@ def visualize(T,xT, fig=None):
     # scale values from 0 to 1
     princ_eig = (princ_eig - np.min(princ_eig)) / (np.max(princ_eig) - np.min(princ_eig))
     # transpose to C x nslice x nrow x ncol
-    princ_eig = princ_eig.transpose(3,0,1,2)
+    img = princ_eig.transpose(3,0,1,2)
     # visualize
-    emlddmm.draw(princ_eig, xJ=xT, fig=fig, n_slices=7)
+    emlddmm.draw(img, xJ=xT, **kwargs)
 
-    return princ_eig
+    return #img
 #%%
 
 dti_path = '/home/brysongray/structure_tensor_analysis/dki/dki_tensor.nii.gz'
@@ -590,8 +622,12 @@ dti_path = '/home/brysongray/structure_tensor_analysis/dki/dki_tensor.nii.gz'
 
 xT, T = read_dti(dti_path)
 
+#%%
 fig = plt.figure(figsize=(10,10))
 eigs = visualize(T,xT,fig=fig)
+
+#%%
+
 emlddmm.write_vtk_data('dki_tensor_directions.vtk', xT, eigs, 'dki_tensor_directions')
 # w, e = np.linalg.eigh(T)
 # princ_eig = e[...,-1]
