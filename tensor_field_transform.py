@@ -138,13 +138,17 @@ def visualize(T,xT, **kwargs):
     """
     # Get tensor principle eigenvectors
     w, e = np.linalg.eigh(T)
-    princ_eig = e[...,-1]
-    # scale values from 0 to 1
-    princ_eig = (princ_eig - np.min(princ_eig)) / (np.max(princ_eig) - np.min(princ_eig))
+    princ_eig = np.abs(e[...,-1])
     # transpose to C x nslice x nrow x ncol
     img = princ_eig.transpose(3,0,1,2)
+    trace = np.trace(T, axis1=-2, axis2=-1)
+    w = w.transpose(3,0,1,2)
+    FA = np.sqrt((3/2) * (np.sum((w - (1/3)*trace)**2,axis=0) / np.sum(w**2, axis=0)))
+    FA = np.nan_to_num(FA)
+    # scale img by FA
+    img = img * FA
     # visualize
-    draw(princ_eig, xJ=xT, **kwargs)
+    draw(img, xJ=xT, **kwargs)
 
     return img
 
