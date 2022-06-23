@@ -559,13 +559,66 @@ def read_dti(dti_path):
     
     return xT, T
 
+
+# preservation of principle directions
+def ppd(tensors,J):
+    """ Preservation of Principle Directions
+
+    Transforms tensors, given a Jacobian field, using preservation of principle directions method.
+
+    Parameters
+    ----------
+    tensors: numpy array
+        5 dimensional array with the last two dimensions being 3x3 containing tensor components.
+    J: numpy array
+        5 dimensional array with the last two dimensions being 3x3 containing Jacobian matrix components.
+
+    """
+    # define function to construct rotation matrix from axis of rotation and angle
+    rot = lambda n, theta : np.array([[np.cos(theta)+n[...,0,None]**2*(1-np.cos(theta)), n[...,0,None]*n[...,1,None]*(1-np.cos(theta))-n[...,2,None]*np.sin(theta), n[...,0,None]*n[...,2,None]*(1-np.cos(theta))+n[...,1,None]*np.sin(theta)],
+                                    [n[...,0,None]*n[...,1,None]*(1-np.cos(theta))+n[...,2,None]*np.sin(theta), np.cos(theta)+n[...,1,None]**2*(1-np.cos(theta)), n[...,1,None]*n[...,2,None]*(1-np.cos(theta))-n[...,0,None]*np.sin(theta)],
+                                    [n[...,0,None]*n[...,2,None]*(1-np.cos(theta))-n[...,1,None]*np.sin(theta), n[...,1,None]*n[...,2,None]*(1-np.cos(theta))+n[...,0,None]*np.sin(theta), np.cos(theta)+n[...,2,None]**2*(1-np.cos(theta))]]).squeeze().transpose(2,3,4,0,1)
+
+    # compute unit eigenvectors, e, of tensors
+    w,e = np.linalg.eigh(tensors)
+    e1 = e[...,-1]
+    e2 = e[...,-2]
+    # compute unit vectors n1 and n2 in the directions of J@e1 and J@e2
+    Je1 = np.squeeze(J @ e1[...,None])
+    n1 = Je1 / np.linalg.norm(Je1, axis=-1)[...,None]
+    Je2 = np.squeeze(J @ e2[...,None])
+    n2 = Je2 / np.linalg.norm(Je2, axis=-1)[...,None]
+    # compute a rotation matrix, R1, that maps e1 onto n1
+    theta = np.arccos(np.squeeze(e1[..., None, :] @ n1[..., None]))[...,None]
+    r = np.cross(e1,n1) / np.sin(theta)
+    # r will be nan wherever e1 and n1 align, i.e. where Je1 == e1. NOTE: Divide by zero warning is suppressed
+    # replace r whereever there are nans with a different r. I use n2 instead of n1.
+    theta2 = np.arccos(np.squeeze(e1[..., None, :] @ n2[..., None]))[...,None]
+    r2 = np.cross(e1,n2) / np.sin(theta2)
+    r[np.isnan(r)] = r2[np.isnan(r)]
+    # theta[np.where(theta==0)] = theta2[np.where(theta==0)]
+    R1 = rot(r,theta)
+    # compute a secondary rotation, about n1, to map e2 from its position after the first rotation, R1 @ e2,
+    # to the n1-n2 plane.
+    Pn2 = n2 - (n2[..., None, :] @ n1[..., None])[...,0] * n1
+    Pn2 = Pn2 / np.linalg.norm(Pn2, axis=-1)[...,None]
+    R1e1 = np.squeeze(R1 @ e1[...,None])
+    R1e2 = np.squeeze(R1 @ e2[...,None])
+    phi = np.arccos(np.squeeze(R1e2[..., None, :] @ Pn2[..., None]) / (np.linalg.norm(R1e2) * np.linalg.norm(Pn2)))[...,None]
+    R2 = rot(R1e1, phi)
+
+    Q = R2 @ R1
+
+    return Q
+
+
 def interp_dti(T, xT, X):
     """ Interpolate DTI
 
     """
     if len(T.shape) == 5: # assume 3x3 tensors along last dimensions
         T = np.stack((T[...,0,0],T[...,1,1],T[...,2,2],T[...,0,1],T[...,0,2],T[...,1,2]),-1)
-    elif T.shape[-1] != 6:
+    else:
         raise Exception("T must contain 3x3 tensors or 6 diffusion components in last dimension") 
     Tnew = []
     for i in range(6):
@@ -573,8 +626,8 @@ def interp_dti(T, xT, X):
         x = interp(xT, T[...,i][None], X)
         Tnew.append(x)
     
-    Tnew = np.stack((Tnew[...,0], Tnew[...,3], Tnew[...,4], Tnew[...,3], Tnew[...,1], Tnew[...,5], Tnew[...,4], Tnew[...,5], Tnew[...,2]), axis=-1)
-    Tnew = Tnew.reshape(Tnew.shape[:-1]+(3,3)) # result is row x col x slice x 3x3
+    Tnew = np.stack((Tnew[0], Tnew[3], Tnew[4], Tnew[3], Tnew[1], Tnew[5], Tnew[4], Tnew[5], Tnew[2]), axis=-1)
+    Tnew = Tnew.reshape(Tnew.shape[:-1]+(3,3)).squeeze() # result is row x col x slice x 3x3
 
     return Tnew
 
@@ -610,33 +663,134 @@ def visualize(T,xT, **kwargs):
     w = w.transpose(3,0,1,2)
     FA = np.sqrt((3/2) * (np.sum((w - (1/3)*trace)**2,axis=0) / np.sum(w**2, axis=0)))
     FA = np.nan_to_num(FA)
+    FA = FA/np.max(FA)
     # scale img by FA
     img = img * FA
     # visualize
     emlddmm.draw(img, xJ=xT, **kwargs)
 
     return img
-#%%
 
-dti_path = '/Users/brysongray/twardlab/datasets/human_amyg/dki_tensor.nii.gz'
+jacobian = lambda X,dv : np.stack(np.gradient(X, dv[0],dv[1],dv[2], axis=(0,1,2)), axis=-1)
 
-# T_ = nib.load(dti_path)
-# # get tensor data
-# T = T_.get_fdata()
-
-xT, T = read_dti(dti_path)
-
-#%%
-fig = plt.figure(figsize=(10,10))
-eigs = visualize(T,xT,fig=fig)
-
-#%%
-
-emlddmm.write_vtk_data('dki_tensor_directions.vtk', xT, eigs, 'dki_tensor_directions')
-# w, e = np.linalg.eigh(T)
-# princ_eig = e[...,-1]
 # %%
-img_path = '/home/brysongray/structure_tensor_analysis/dki_tensor_directions.vtk'
+# TRANSFORM DTI to HIST REGISTERED SPACE
+#################################################################################################################################################################################
+# dwi_to_mri_path = '/home/brysongray/emlddmm/amyg_maps_for_bryson/mri_avg_dwi_to_mri.vtk'
+hist_to_mri_path = '/home/brysongray/data/human_amyg/amyg_maps_for_bryson/registered_histology_to_mri_displacement.vtk'
+mri_to_hist_path = '/home/brysongray/data/human_amyg/amyg_maps_for_bryson/mri_to_registered_histology_displacement.vtk'
+dti_path = '/home/brysongray/data/dki/dki_tensor.nii.gz'
+hist_path = '/home/brysongray/data/human_amyg/amyg_maps_for_bryson/mri_avg_b0_to_registered_histology.vtk'
 
-img = emlddmm.read_vtk_data(img_path)
+# load disp and original image
+_,hist_to_mri,_,_ = read_data(hist_to_mri_path)
+hist_to_mri_T = np.stack((hist_to_mri[0][1], hist_to_mri[0][0], hist_to_mri[0][2])).transpose(0,2,1,3)
+xI,I,_,_ = read_data(hist_path)
+#%%
+# match axes to dti
+I = I.transpose(0,2,1,3)
+xI = [xI[1],xI[0],xI[2]]
+dx = [(x[1] - x[0]) for x in xI]
+# get transformed coordinates
+Xin = np.stack(np.meshgrid(xI[0],xI[1],xI[2], indexing='ij')) # stack coordinates to match dti
+X = hist_to_mri_T + Xin
+
+# read dti
+xT, T = read_dti(dti_path)
+# resample dti in registered histology space
+Tnew = interp_dti(T,xT,X)
+# rotate tensors
+J = jacobian(X.transpose(1,2,3,0),dx)
+Q = ppd(Tnew,J)
+Tnew = Q @ Tnew @ Q.transpose(0,1,2,4,3)
+
+#%%
+# visualize transformed dti
+fig1 = plt.figure(figsize=(12,12))
+dti_to_hist = visualize(Tnew,xI,fig=fig1)
+
+# visualize avg dwi in registered histology space
+fig2 = plt.figure(figsize=(12,12))
+emlddmm.draw(I,xI,fig2)
+
+# visualize original dti
+fig3 = plt.figure(figsize=(12,12))
+dti = visualize(T,xT,fig=fig3)
+
+# %%
+
+emlddmm.write_vtk_data('/home/brysongray/structure_tensor_analysis/output_images/dti_to_histology.vtk', xI, dti_to_hist[None], 'human_amyg_dti_to_hist')
+# %%
+# TRANSFORM FROM HIST REGISTERED TO HIST INPUT SPACE
+#################################################################################################################################################################################
+import torch
+import emlddmm
+import numpy as np
+
+dtype = torch.float
+device = 'cpu'
+
+src_path = '/home/brysongray/structure_tensor_analysis/output_images/dti_to_registered_histology.vtk'
+transforms = '/home/brysongray/data/human_amyg/amygdala_outputs_v00/input_histology/registered_histology_to_input_histology/transforms/'
+
+xJ, J, J_title, _ = emlddmm.read_data(src_path) # the image to be transformed
+J = J.astype(float)
+J = torch.as_tensor(J,dtype=dtype,device=device)
+xJ = [torch.as_tensor(np.copy(x),dtype=dtype,device=device) for x in xJ]
+
+x_series = xJ
+X_series = torch.stack(torch.meshgrid(x_series, indexing='ij'), -1)
+
+transforms_ls = sorted(os.listdir(transforms), key=lambda x: x.split('_matrix.txt')[0][-4:])
+#%%
+A2d = []
+for t in transforms_ls:
+    A2d_ = np.genfromtxt(os.path.join(transforms, t), delimiter=' ')
+    # note that there are nans at the end if I have commas at the end
+    if np.isnan(A2d_[0, -1]):
+        A2d_ = A2d_[:, :A2d_.shape[1] - 1]
+    A2d.append(A2d_)
+
+A2d = torch.as_tensor(np.stack(A2d),dtype=dtype,device=device)
+A2di = torch.inverse(A2d)
+points = (A2di[:, None, None, :2, :2] @ X_series[..., 1:, None])[..., 0] 
+m0 = torch.min(points[..., 0])
+M0 = torch.max(points[..., 0])
+m1 = torch.min(points[..., 1])
+M1 = torch.max(points[..., 1])
+# construct a recon domain
+dJ = [x[1] - x[0] for x in x_series]
+# print('dJ shape: ', [x.shape for x in dJ])
+xr0 = torch.arange(float(m0), float(M0), dJ[1], device=m0.device, dtype=m0.dtype)
+xr1 = torch.arange(float(m1), float(M1), dJ[2], device=m0.device, dtype=m0.dtype)
+xr = x_series[0], xr0, xr1
+XR = torch.stack(torch.meshgrid(xr), -1)
+# reconstruct 2d series
+Xs = torch.clone(XR)
+Xs[..., 1:] = (A2d[:, None, None, :2, :2] @ XR[..., 1:, None])[..., 0] + A2d[:, None, None, :2, -1]
+Xs = Xs.permute(3, 0, 1, 2)
+Jr = interp_dti(xJ, J, Xs)
+
+#%%
+
+# save transformed 2d images   
+img_out = os.path.join('/home/brysongray/data/human_amyg/amygdala_outputs_v00/input_histology/registered_histology_to_input_histology/images')
+if not os.path.exists(img_out):
+    os.makedirs(img_out)
+for i in range(Jr.shape[1]):
+    Jr_ = Jr[:, i, None, ...]
+    xr_ = [torch.tensor([xr[0][i], xr[0][i]+10]), xr[1], xr[2]]
+    title = f'dti_to_histology_input_{dest_slice_names[i]}'
+    emlddmm.write_vtk_data(os.path.join(img_out, f'{space}_INPUT_{src_slice_names[i]}_to_{space}_REGISTERED_{dest_slice_names[i]}.vtk'), xr_, Jr_, title)
+
+#%%
+import sys
+sys.path.insert(0, '/home/brysongray/emlddmm')
+import histsetup
+
+subject_dir = '/home/brysongray/data/human_amyg/sta_output'
+output_dir = subject_dir
+
+histsetup.make_samples_tsv(subject_dir,ext='h5')
+histsetup.generate_sidecars(subject_dir,'h5',max_slice=293)
 # %%

@@ -99,7 +99,7 @@ def interp_dti(T, xT, X):
     """
     if len(T.shape) == 5: # assume 3x3 tensors along last dimensions
         T = np.stack((T[...,0,0],T[...,1,1],T[...,2,2],T[...,0,1],T[...,0,2],T[...,1,2]),-1)
-    elif T.shape[-1] != 6:
+    else:
         raise Exception("T must contain 3x3 tensors or 6 diffusion components in last dimension") 
     Tnew = []
     for i in range(6):
@@ -107,8 +107,8 @@ def interp_dti(T, xT, X):
         x = interp(xT, T[...,i][None], X)
         Tnew.append(x)
     
-    Tnew = np.stack((Tnew[...,0], Tnew[...,3], Tnew[...,4], Tnew[...,3], Tnew[...,1], Tnew[...,5], Tnew[...,4], Tnew[...,5], Tnew[...,2]), axis=-1)
-    Tnew = Tnew.reshape(Tnew.shape[:-1]+(3,3)) # result is row x col x slice x 3x3
+    Tnew = np.stack((Tnew[0], Tnew[3], Tnew[4], Tnew[3], Tnew[1], Tnew[5], Tnew[4], Tnew[5], Tnew[2]), axis=-1)
+    Tnew = Tnew.reshape(Tnew.shape[:-1]+(3,3)).squeeze() # result is row x col x slice x 3x3
 
     return Tnew
 
@@ -145,6 +145,7 @@ def visualize(T,xT, **kwargs):
     w = w.transpose(3,0,1,2)
     FA = np.sqrt((3/2) * (np.sum((w - (1/3)*trace)**2,axis=0) / np.sum(w**2, axis=0)))
     FA = np.nan_to_num(FA)
+    FA = FA/np.max(FA)
     # scale img by FA
     img = img * FA
     # visualize
