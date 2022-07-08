@@ -1,5 +1,6 @@
 # %%
 from pickletools import uint8
+from turtle import st
 from scipy.ndimage import gaussian_filter, sobel
 from torch.nn.functional import grid_sample
 import os
@@ -73,7 +74,7 @@ def construct_S(xx, yy, xy, down=0, A=None):
     
     return S
 
-def struct_tensor(I, sigma=1, down=0, A=None):
+def struct_tensor(I, sigma=1, down=0, A=None, all=False):
     # sobel function gets approx. gradient of image intensity along the specified axis
     print('calculating image gradients...')
 
@@ -88,29 +89,31 @@ def struct_tensor(I, sigma=1, down=0, A=None):
 
     S = construct_S(I_x_sq, I_y_sq,
         I_xy, A=A, down=down)
+    if all:
+        # construct orientation (theta) and anisotropy index (AI)
+        print('calculating orientations and anisotropy...')
+        d,v = np.linalg.eig(S)
 
-    # construct orientation (theta) and anisotropy index (AI)
-    print('calculating orientations and anisotropy...')
-    d,v = np.linalg.eig(S)
+        # get only principle eigenvectors
+        max_idx = np.abs(d).argmax(axis=-1)
+        max_idx = np.ravel(max_idx)
+        max_idx = np.array([np.arange(max_idx.shape[0]), max_idx])
+        v = np.transpose(v, axes=(0,1,3,2)).reshape(-1,2,2)
+        v = v[max_idx[0],max_idx[1]].reshape(S.shape[0],-1,2)
+        theta = ((np.arctan(v[...,1] / v[...,0])) + np.pi / 2) / np.pi
+        AI = abs(d[...,0] - d[...,1]) / abs(d[...,0] + d[...,1])
 
-    # get only principle eigenvectors
-    max_idx = np.abs(d).argmax(axis=-1)
-    max_idx = np.ravel(max_idx)
-    max_idx = np.array([np.arange(max_idx.shape[0]), max_idx])
-    v = np.transpose(v, axes=(0,1,3,2)).reshape(-1,2,2)
-    v = v[max_idx[0],max_idx[1]].reshape(S.shape[0],-1,2)
-    theta = ((np.arctan(v[...,1] / v[...,0])) + np.pi / 2) / np.pi
-    AI = abs(d[...,0] - d[...,1]) / abs(d[...,0] + d[...,1])
+        # make hsv image where hue= primary orientation, saturation= anisotropy, value= original image
+        print('constructing hsv image...')
+        
+        if down:
+            I = resize(I, (I.shape[0]//down, I.shape[1]//down), anti_aliasing=True)
+        stack = np.stack([theta,AI,I], -1)
+        hsv = matplotlib.colors.hsv_to_rgb(stack)
 
-    # make hsv image where hue= primary orientation, saturation= anisotropy, value= original image
-    print('constructing hsv image...')
-    
-    if down:
-        I = resize(I, (I.shape[0]//down, I.shape[1]//down), anti_aliasing=True)
-    stack = np.stack([theta,AI,I], -1)
-    hsv = matplotlib.colors.hsv_to_rgb(stack)
-
-    return S, theta, AI, hsv
+        return {'S':S, 'theta':theta, 'AI':AI, 'hsv':hsv}
+    else:
+        return S
 
 
 def interp(x,I,phii,**kwargs):
@@ -235,23 +238,20 @@ def main():
     reverse_intensity = args.reverse_intensity
 
     I = load_img(image, img_down, reverse_intensity)
-    S, theta, AI, hsv = struct_tensor(I, sigma, down)
+    if args.all==True:
+        st_out = struct_tensor(I, sigma, down, all=True)
+        S = st_out['S']
+        theta = st_out['theta']
+        AI = st_out['AI']
+        hsv = st_out['hsv']
+    else:
+        S = struct_tensor(I, sigma, down)
 
     # save out structure tensor field
     base = os.path.splitext(os.path.split(image)[1])[0]
     S_name = base + '_S.h5'
     with h5py.File(os.path.join(out, S_name), 'w') as f:
             f.create_dataset('S', data=S)
-    # xx_name = base + '_xx.h5'
-    # yy_name = base + '_yy.h5'
-    # xy_name = base + '_xy.h5'
-
-    # with h5py.File(os.path.join(out, xx_name), 'w') as f:
-    #     f.create_dataset('xx', data=S[..., 0])
-    # with h5py.File(os.path.join(out, yy_name), 'w') as f:
-    #     f.create_dataset('yy', data=S[..., 3])
-    # with h5py.File(os.path.join(out, xy_name), 'w') as f:
-    #     f.create_dataset('xy', data=S[..., 1])
 
     # save out images
     if args.all:
@@ -266,3 +266,5 @@ def main():
 #%%
 if __name__ == "__main__":
     main()
+
+#%%

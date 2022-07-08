@@ -108,7 +108,7 @@ for i in range(len(st_list_x)):
 nSm = np.max(nS_,0)
 nSm = (np.quantile(nS_,0.95,axis=0)*1.01).astype(int) 
 print('padding and assembling into 3D volume')
-S = np.zeros((len(S_),nSm[0],nSm[1],3))
+S = np.zeros((len(S_),nSm[0],nSm[1],3), dtype=np.float32)
 W0 = np.zeros((len(S_),nSm[0],nSm[1]))
 for i in range(len(S_)):
     S__ = S_[i]
@@ -133,8 +133,9 @@ nS = np.array(S.shape)
 xS = [np.arange(n)*d - (n-1)*d/2.0 for n,d in zip(nS[1:],dS)]
 # W0 = W0 * np.logical_not(np.all(S==0.0,0))
 # W0 = W0 * np.logical_not(np.all(S==1.0,0))
-del S_, S__, Sp, nS_, nS, W0
+del S_, S__, Sp, nS_, nS, W0, img
 #%%
+# FIRST REGISTER TO NISSL INPUT SPACE
 # load rigid transforms
 A2d = []
 for path in transform_paths:
@@ -156,20 +157,30 @@ M1 = torch.max(points[..., 1])
 xr0 = torch.arange(float(m0), float(M0), dS[1], device=m0.device, dtype=m0.dtype)
 xr1 = torch.arange(float(m1), float(M1), dS[2], device=m0.device, dtype=m0.dtype)
 xr = xS[0], xr0, xr1
-XR = torch.stack(torch.meshgrid(xr, indexing='ij'), -1)
+XR = torch.stack(torch.meshgrid(xr, indexing='ij'), -1).float()
 del XS, points
-#%%
 # reconstruct 2d series
+A2d = A2d.float()
 XR[..., 1:] = (A2d[:, None, None, :2, :2] @ XR[..., 1:, None])[..., 0] + A2d[:, None, None, :2, -1]
 #%%
-Xs = Xs.permute(3, 0, 1, 2)
-Sr = emlddmm.interp(xS, S, Xs)
-
-# stack slices
-
+XR = XR.permute(3, 0, 1, 2)
+xS = [x.float() for x in xS]
+Sr = emlddmm.interp(xS, S, XR)
+del S, XR
+#%%
 # stack component into tensors
-
+Sr = torch.stack((Sr[0], Sr[1], Sr[1], Sr[2]), dim=-1)
+Sr = Sr.reshape(Sr.shape[:3] + (2,2)).detach().numpy()
+#%%
+# write out registered structure tensors
+st_name = 'structure_tensors_to_registered_histology.h5'
+out = 'output_images/'
+with h5py.File(os.path.join(out, st_name), 'w') as f:
+        f.create_dataset('sta registered', data=Sr)
+#%%
 # get principle orientations
+w,e = np.linalg.eigh(Sr)
+e_prime = e[...,-1]
 
 #%%
 # load dti_to_registered_histology
