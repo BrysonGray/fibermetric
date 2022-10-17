@@ -1,6 +1,10 @@
+'''
+Author: Bryson Gray
+2022
+
+'''
+
 # %%
-from pickletools import uint8
-from turtle import st
 from scipy.ndimage import gaussian_filter, sobel
 from torch.nn.functional import grid_sample
 import os
