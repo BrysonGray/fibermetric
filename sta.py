@@ -5,7 +5,7 @@ Author: Bryson Gray
 '''
 
 # %%
-from scipy.ndimage import gaussian_filter, sobel
+from scipy.ndimage import gaussian_filter1d
 from torch.nn.functional import grid_sample
 import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2,40).__str__()
@@ -33,7 +33,7 @@ def load_img(impath, img_down=0, reverse_intensity=False):
     return I
 
 # function for applying rigid transformations to S
-def construct_S(xx, yy, xy, down=0, A=None):
+def construct_S(yy, xx, xy, down=0, A=None):
     '''
     Construct the structure tensor image from its components and apply a rigid transfrom if one is given.
     
@@ -67,7 +67,7 @@ def construct_S(xx, yy, xy, down=0, A=None):
         yy = interp(xS, yy[None, ..., None].astype(np.double), AiS).squeeze().numpy()[...,0]
         xy = interp(xS, xy[None, ..., None].astype(np.double), AiS).squeeze().numpy()[...,0]
 
-    S = np.stack((xx, xy, xy, yy), axis=-1)
+    S = np.stack((yy, xy, xy, xx), axis=-1)
     if down:
         S = resize(S, (S.shape[0]//down, S.shape[1]//down, 4), anti_aliasing=True)
     S = S.reshape((S.shape[0],S.shape[1],2,2))
@@ -78,21 +78,15 @@ def construct_S(xx, yy, xy, down=0, A=None):
     
     return S
 
-def struct_tensor(I, sigma=1, down=0, A=None, all=False):
-    # sobel function gets approx. gradient of image intensity along the specified axis
+def struct_tensor(I, sigma=3, down=0, A=None, all=False):
     print('calculating image gradients...')
-
-    I_y = sobel(I, axis=0)
-    I_x = sobel(I, axis=1)
+    I_x = gaussian_filter1d(I, sigma=sigma, axis=1)
+    I_y = gaussian_filter1d(I, sigma=sigma, axis=0)
 
     # construct the structure tensor, s
     print('constructing structure tensors...')
-    I_y_sq = gaussian_filter(I_y**2, sigma=sigma)
-    I_x_sq = gaussian_filter(I_x**2, sigma=sigma)
-    I_xy = gaussian_filter(I_x*I_y, sigma=sigma)
-
-    S = construct_S(I_x_sq, I_y_sq,
-        I_xy, A=A, down=down)
+    S = construct_S(I_y**2, I_x**2,
+        I_x*I_y, A=A, down=down)
     if all:
         # construct orientation (theta) and anisotropy index (AI)
         print('calculating orientations and anisotropy...')
