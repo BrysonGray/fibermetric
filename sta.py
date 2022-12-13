@@ -80,8 +80,10 @@ def construct_S(yy, xx, xy, down=0, A=None):
 
 def struct_tensor(I, sigma=3, down=0, A=None, all=False):
     print('calculating image gradients...')
-    I_x = gaussian_filter1d(I, sigma=sigma, axis=1)
+    I_x = gaussian_filter1d(I, sigma=sigma, axis=1, order=1)
+    I_x = gaussian_filter1d(I_x, sigma=sigma, axis=0, order=0)
     I_y = gaussian_filter1d(I, sigma=sigma, axis=0)
+    I_y = gaussian_filter1d(I_y, sigma=sigma, axis=0, order=0)
 
     # construct the structure tensor, s
     print('constructing structure tensors...')
