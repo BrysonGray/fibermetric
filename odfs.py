@@ -7,6 +7,9 @@ from dipy.data import get_sphere
 from dipy.core.sphere import Sphere
 from dipy.reconst.shm import sh_to_sf
 from tqdm import tqdm
+import sympy
+from sympy import Ynm, Symbol, integrate
+import pickle
 
 def sh_to_cf(sh_signal, ndir, nbins, norm=True):
     
@@ -54,6 +57,52 @@ def sh_to_cf(sh_signal, ndir, nbins, norm=True):
     cf = np.reshape(cf, tuple(cf_shape))
     if norm:
         cf = cf / np.sum(cf)
+
+    return cf
+
+def sh_to_cf_analytical(sh_signal, ndir, source):
+    # set up basis (based on Dipy descoteaux07 basis)
+    theta = Symbol("theta")
+    phi = Symbol("phi")
+    degree = {1:0,
+             2:6,
+             15:4,
+             28:6,
+             45:8,
+             66:10,
+             91:12,
+             120:14}
+    n = degree[sh_signal.shape[0]]
+    print(f'spherical harmonic degree is {n}.')
+    try:
+        path = os.path.join(source,'Yphi.p')
+        with open(path, 'rb') as f:
+            Yphi = pickle.load(f)
+            print(f"found basis saved at {path}")
+            if len(Yphi) != sh_signal.shape[0]:
+                raise Exception("basis does not match the spherical harmonic signal.")
+
+    except:
+        Yphi = []
+        print("computing a new basis...")
+        for n in tqdm(np.arange(n+1, step=2)):
+            for m in np.arange(-n,n+1):
+                if m < 0:
+                    Yphi.append(sympy.sqrt(2)*sympy.re(integrate(Ynm(n,m,theta,phi).expand(func=True),(theta,0,sympy.pi))))
+                elif m == 0:
+                    Yphi.append(integrate(Ynm(n,m,theta,phi).expand(func=True),(theta,0,sympy.pi)))
+                elif m > 0:
+                    Yphi.append(sympy.sqrt(2)*sympy.im(integrate(Ynm(n,m,theta,phi).expand(func=True),(theta,0,sympy.pi))))
+        print('done')
+        with open(os.path.join(source,'Yphi.p'), 'wb') as f:
+            pickle.dump(Yphi, f)
+    Y_matrix = np.zeros((ndir,len(Yphi)))
+    print(f'Y matrix shape: {Y_matrix.shape}')
+    for t in range(ndir):
+        for i,y in enumerate(Yphi):
+            x = t*ndir/np.pi
+            Y_matrix[t,i] = float(y.evalf(subs={phi:x}))
+    cf = np.moveaxis(np.squeeze(Y_matrix @ np.moveaxis(sh_signal,0,-1)[...,None]),-1,0)
 
     return cf
 
