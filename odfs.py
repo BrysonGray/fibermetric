@@ -60,7 +60,7 @@ def sh_to_cf(sh_signal, ndir, nbins, norm=True):
 
     return cf
 
-def sh_to_cf_analytical(sh_signal, ndir, source):
+def sh_to_cf_symbolic(sh_signal, ndir, source):
     # set up basis (based on Dipy descoteaux07 basis)
     theta = Symbol("theta")
     phi = Symbol("phi")
@@ -98,9 +98,9 @@ def sh_to_cf_analytical(sh_signal, ndir, source):
             pickle.dump(Yphi, f)
     Y_matrix = np.zeros((ndir,len(Yphi)))
     print(f'Y matrix shape: {Y_matrix.shape}')
-    for t in range(ndir):
+    for t in tqdm(range(ndir)):
         for i,y in enumerate(Yphi):
-            x = t*ndir/np.pi
+            x = t*2*np.pi/ndir
             Y_matrix[t,i] = float(y.evalf(subs={phi:x}))
     cf = np.moveaxis(np.squeeze(Y_matrix @ np.moveaxis(sh_signal,0,-1)[...,None]),-1,0)
 

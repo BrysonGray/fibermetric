@@ -6,6 +6,7 @@ Author: Bryson Gray
 
 # %%
 from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage import gaussian_filter, sobel
 from torch.nn.functional import grid_sample
 import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2,40).__str__()
@@ -80,19 +81,31 @@ def construct_S(yy, xx, xy, down=0, A=None):
 
 def struct_tensor(I, sigma=3, down=0, A=None, all=False):
     print('calculating image gradients...')
-    I_x = gaussian_filter1d(I, sigma=sigma, axis=1, order=1)
-    I_x = gaussian_filter1d(I_x, sigma=sigma, axis=0, order=0)
-    I_y = gaussian_filter1d(I, sigma=sigma, axis=0)
-    I_y = gaussian_filter1d(I_y, sigma=sigma, axis=0, order=0)
+    # I_x = gaussian_filter1d(I, sigma=sigma, axis=1, order=1)
+    # I_x = gaussian_filter1d(I_x, sigma=sigma, axis=0, order=0)
+    # I_y = gaussian_filter1d(I, sigma=sigma, axis=0, order=1)
+    # I_y = gaussian_filter1d(I_y, sigma=sigma, axis=1, order=0)
+
+    # # construct the structure tensor, s
+    # print('constructing structure tensors...')
+    # S = construct_S(I_y**2, I_x**2,
+    #     I_x*I_y, A=A, down=down)
+    
+    I_y = sobel(I, axis=0)
+    I_x = sobel(I, axis=1)
 
     # construct the structure tensor, s
     print('constructing structure tensors...')
-    S = construct_S(I_y**2, I_x**2,
-        I_x*I_y, A=A, down=down)
+    I_y_sq = gaussian_filter(I_y**2, sigma=sigma)
+    I_x_sq = gaussian_filter(I_x**2, sigma=sigma)
+    I_xy = gaussian_filter(I_x*I_y, sigma=sigma)
+
+    S = construct_S(I_y_sq, I_x_sq,
+        I_xy, A=A, down=down)
     if all:
         # construct orientation (theta) and anisotropy index (AI)
         print('calculating orientations and anisotropy...')
-        d,v = np.linalg.eig(S)
+        d,v = np.linalg.eigh(S)
 
         # get only principle eigenvectors
         max_idx = np.abs(d).argmax(axis=-1)
@@ -115,6 +128,36 @@ def struct_tensor(I, sigma=3, down=0, A=None, all=False):
     else:
         return S
 
+def odf2d(theta, nbins, tile_size, damping=0.1):
+    '''
+    Create an array of 2D orientation distribution functions by aggregating the structure tensor angles (theta) into tiles.
+    The odf is modeled as a fourier series fit to the histogram of angles for each tile. The length of the output odf is set to nbins. 
+
+    Parameters
+    ----------
+    theta: numpy Array
+        Two dimensional array of angles scaled to the range (0,1).
+    nbins: int
+        The length of each odf in the output array.
+    tile_size: int
+        The size of the tiles used to aggregate angles. The sample size for each odf will be tile_size^2.
+    damping: int
+        Sets the degree of damping applied to fourier coefficients. Greater damping results in smoother odfs.
+
+    '''
+    # reshape theta so the last two dimensions are shape (patch_size, patch_size)
+    # it will have to be cropped if the number of pixels on each dimension doesn't divide evenly into patch_size
+    i, j = [x//tile_size for x in theta.shape]
+    theta = theta[:i*tile_size,:j*tile_size].reshape((i,j,tile_size*tile_size))
+    theta_flip = np.where(theta <= 0, theta+1, theta-1)
+    theta = np.concatenate((theta,theta_flip), axis=-1)
+    theta_F = np.fft.rfft(theta)
+    n = np.arange(len(theta_F))
+    theta_F = theta_F * np.exp(-1*damping*n) # apply damping
+    odf = np.fft.irfft(theta_F, nbins)
+    odf = odf / np.sum(odf, axis=-1)[...,None] # normalize to make this a pdf
+
+    return odf
 
 def interp(x,I,phii,**kwargs):
     '''
@@ -136,7 +179,7 @@ def interp(x,I,phii,**kwargs):
         with components along the first axis (e.g. x0,x1,x1) and spatial dimensions 
         along the last 3.
     kwargs : dict
-        keword arguments to be passed to the grid sample function. For example
+        Keyword arguments to be passed to the grid sample function. For example
         to specify interpolation type like nearest.  See pytorch grid_sample documentation.
     
     Returns
