@@ -148,11 +148,16 @@ def odf2d(theta, nbins, tile_size, damping=0.1):
     # reshape theta so the last two dimensions are shape (patch_size, patch_size)
     # it will have to be cropped if the number of pixels on each dimension doesn't divide evenly into patch_size
     i, j = [x//tile_size for x in theta.shape]
-    theta = theta[:i*tile_size,:j*tile_size].reshape((i,j,tile_size*tile_size))
+    theta = theta[:i*tile_size,:j*tile_size] # crop so theta divides evenly into tile_size
+    # reshape into tiles by manipulating strides. (np.reshape preserves contiguity of elements, which we don't want in this case)
+    nbits = theta.strides[-1]
+    theta = np.lib.stride_tricks.as_strided(theta, shape=(i,j,tile_size,tile_size), strides=(tile_size*theta.shape[1]*nbits,tile_size*nbits,theta.shape[1]*nbits,nbits))
+    theta = theta.reshape(i,j,tile_size**2)
+    # concatenate a copy of theta but with angles in the opposite direction to make the odfs symmetric (since structure tensors are symmetric).
     theta_flip = np.where(theta <= 0, theta+1, theta-1)
     theta = np.concatenate((theta,theta_flip), axis=-1)
     theta_F = np.fft.rfft(theta)
-    n = np.arange(len(theta_F))
+    n = np.arange(theta_F.shape[-1])
     theta_F = theta_F * np.exp(-1*damping*n) # apply damping
     odf = np.fft.irfft(theta_F, nbins)
     odf = odf / np.sum(odf, axis=-1)[...,None] # normalize to make this a pdf
