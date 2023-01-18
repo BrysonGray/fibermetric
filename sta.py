@@ -108,11 +108,12 @@ def struct_tensor(I, sigma=3, down=0, A=None, all=False):
         d,v = np.linalg.eigh(S)
 
         # get only principle eigenvectors
-        max_idx = np.abs(d).argmax(axis=-1)
-        max_idx = np.ravel(max_idx)
-        max_idx = np.array([np.arange(max_idx.shape[0]), max_idx])
-        v = np.transpose(v, axes=(0,1,3,2)).reshape(-1,2,2)
-        v = v[max_idx[0],max_idx[1]].reshape(S.shape[0],-1,2)
+        # max_idx = np.abs(d).argmax(axis=-1)
+        # max_idx = np.ravel(max_idx)
+        # max_idx = np.array([np.arange(max_idx.shape[0]), max_idx])
+        # v = np.moveaxis(v, -1,-2).reshape(-1,2,2)
+        # v = v[max_idx[0],max_idx[1]].reshape(S.shape[0],-1,2)
+        v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue with all being > 0
         theta = ((np.arctan(v[...,1] / v[...,0])) + np.pi / 2) / np.pi
         AI = abs(d[...,0] - d[...,1]) / abs(d[...,0] + d[...,1])
 
@@ -128,9 +129,69 @@ def struct_tensor(I, sigma=3, down=0, A=None, all=False):
     else:
         return S
 
+def structure_tensor(I, sigma, dI):
+    '''
+    Construct structure tensors from a grayscale image. Accepts 2D or 3D arrays
+
+    Parameters
+    ----------
+    I : array_like
+        2D or 3D scalar image
+    sigma : scalar or sequence of scalars
+        Standard deviation for Gaussian kernel. The standard deviations of the Gaussian filter
+        are given for each axis as a sequence, or as a single number, in which case it is equal
+        for all axes.
+    dI : Tuple
+        Image pixel dimensions. The derivative and gaussian kernel standard deviation is scaled by the inverse of the pixel size.
+    Returns
+    -------
+    S : array_like
+        Array of structure tensors with image dimensions along the first axes and tensors in the last two dimensions.
+
+    '''
+
+    if I.ndim == 2:
+
+        dy = dI[0]
+        dx = dI[1]
+
+        I_y = sobel(I, axis=0)/dy
+        I_x = sobel(I, axis=1)/dy
+
+        # construct the structure tensor, s
+        yy = gaussian_filter(I_y**2, sigma=sigma/dy)
+        xx = gaussian_filter(I_x**2, sigma=sigma/dx)
+        xy = gaussian_filter(I_x*I_y, sigma=sigma/(dx*dy))
+        S = np.stack((yy, xy, xy, xx), axis=-1)
+        S = S.reshape((S.shape[:-1]+(2,2)))
+
+    elif I.ndim == 3:
+
+        dz = dI[0]
+        dy = dI[1]
+        dx = dI[2]
+
+        I_z = sobel(I, axis=0)
+        I_y = sobel(I, axis=1)
+        I_x = sobel(I, axis=2)
+        zz = gaussian_filter(I_z**2, sigma=sigma/dz)
+        yy = gaussian_filter(I_y**2, sigma=sigma/dy)
+        xx = gaussian_filter(I_x**2, sigma=sigma/dx)
+        zy = gaussian_filter(I_z*I_y, sigma=sigma/(dz*dy))
+        zx = gaussian_filter(I_z*I_x, sigma=sigma/(dz*dx))
+        yx = gaussian_filter(I_x*I_y, sigma=sigma/(dy*dx))
+
+        S = np.stack((zz, zy, zx, zy, yy, yx, zx, yx, xx), axis=-1)
+        S = S.reshape((S.shape[:-1]+(3,3)))
+    else:
+        raise Exception(f'Input must be a 2 or 3 dimensional array but found: {I.ndim}')
+
+    return S
+
+    
 def odf2d(theta, nbins, tile_size, damping=0.1):
     '''
-    Create an array of 2D orientation distribution functions by aggregating the structure tensor angles (theta) into tiles.
+    Create an array of 2D orientation distribution functions (ODFs) by aggregating the structure tensor angles (theta) into tiles.
     The odf is modeled as a fourier series fit to the histogram of angles for each tile. The length of the output odf is set to nbins. 
 
     Parameters
@@ -143,24 +204,37 @@ def odf2d(theta, nbins, tile_size, damping=0.1):
         The size of the tiles used to aggregate angles. The sample size for each odf will be tile_size^2.
     damping: int
         Sets the degree of damping applied to fourier coefficients. Greater damping results in smoother odfs.
+    
+    Returns
+    -------
+    odf: numpy Array
+        array of ODFs with each ODF representing the distribution of angles in a patch of theta with size equal to tile_size^2.
 
     '''
+    print('reshaping...')
+    theta = theta*np.pi - np.pi/2 # transform (0,1) -> (-pi/2,pi/2)
     # reshape theta so the last two dimensions are shape (patch_size, patch_size)
     # it will have to be cropped if the number of pixels on each dimension doesn't divide evenly into patch_size
     i, j = [x//tile_size for x in theta.shape]
-    theta = theta[:i*tile_size,:j*tile_size] # crop so theta divides evenly into tile_size
+    theta = np.array(theta[:i*tile_size,:j*tile_size]) # crop so theta divides evenly into tile_size (must create a new array to change stride lengths too.)
     # reshape into tiles by manipulating strides. (np.reshape preserves contiguity of elements, which we don't want in this case)
     nbits = theta.strides[-1]
     theta = np.lib.stride_tricks.as_strided(theta, shape=(i,j,tile_size,tile_size), strides=(tile_size*theta.shape[1]*nbits,tile_size*nbits,theta.shape[1]*nbits,nbits))
     theta = theta.reshape(i,j,tile_size**2)
+    print('creating symmetric distribution...')
     # concatenate a copy of theta but with angles in the opposite direction to make the odfs symmetric (since structure tensors are symmetric).
-    theta_flip = np.where(theta <= 0, theta+1, theta-1)
+    theta_flip = theta - np.pi
+    theta_flip = np.where(theta_flip < -1*np.pi, theta_flip + 2*np.pi, theta_flip)
     theta = np.concatenate((theta,theta_flip), axis=-1)
-    theta_F = np.fft.rfft(theta)
-    n = np.arange(theta_F.shape[-1])
-    theta_F = theta_F * np.exp(-1*damping*n) # apply damping
-    odf = np.fft.irfft(theta_F, nbins)
+    print('fitting to fourier series...')
+    t = np.arange(nbins)*2*np.pi/(nbins-1) - np.pi
+    odf = np.apply_along_axis(lambda a: np.histogram(a, bins=t)[0], axis=-1, arr=theta)
+    odf_F = np.fft.rfft(odf)
+    n = np.arange(odf_F.shape[-1])
+    odf_F = odf_F * np.exp(-1*damping*n) # apply damping
+    odf = np.fft.irfft(odf_F, nbins)
     odf = odf / np.sum(odf, axis=-1)[...,None] # normalize to make this a pdf
+    print('done')
 
     return odf
 
@@ -311,8 +385,7 @@ def main():
         cv2.imwrite(os.path.join(out, name), (hsv*255).astype(np.uint8), [cv2.IMWRITE_PNG_COMPRESSION, 0])
     
     return
-#%%
+
+
 if __name__ == "__main__":
     main()
-
-#%%
