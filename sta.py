@@ -4,8 +4,6 @@ Author: Bryson Gray
 
 '''
 
-# %%
-from scipy.ndimage import gaussian_filter1d
 from scipy.ndimage import gaussian_filter, sobel
 from torch.nn.functional import grid_sample
 import os
@@ -17,6 +15,10 @@ import torch
 import matplotlib
 import argparse
 import h5py
+from dipy.core.sphere import disperse_charges, Sphere, HemiSphere
+from dipy.reconst.shm import sh_to_sf_matrix, sh_to_sf
+
+
 
 def load_img(impath, img_down=0, reverse_intensity=False):
     imname = os.path.split(impath)[1]
@@ -33,127 +35,34 @@ def load_img(impath, img_down=0, reverse_intensity=False):
 
     return I
 
-# function for applying rigid transformations to S
-def construct_S(yy, xx, xy, down=0, A=None):
-    '''
-    Construct the structure tensor image from its components and apply a rigid transfrom if one is given.
-    
-    Parameters
-    ----------
-    xx : numpy 2d-array
-        Numpy array storing x gradient information of the original 2D image.
-    yy : numpy 2d-array
-        Numpy array storing y gradient information of the original 2D image.
-    xy : numpy 2d-array
-        Numpy array storing x gradient * y gradient of the original 2D image.
-    A : numpy 2d-array
-        3x3 rigid transformation matrix
-    Returns
-    -------
-    S : array
-        Structure tensor image
-    
-    
-    '''
-    if A is not None:
-        # first apply rigid transformation to coordinates and resample each component of S.
-        Ai = np.linalg.inv(A)
-        # get coordinate grid of S
-        xS = [np.arange(xx.shape[0])-xx.shape[0]/2, np.arange(xx.shape[1])-xx.shape[1]/2, np.arange(2)] # place origin in center of image
-        XS = np.stack(np.meshgrid(xS[0], xS[1], xS[2]), axis=-1).transpose(1,0,2,3) # we assume A is in x,y,z order so make XS x,y,z to match
-        # apply transform to coordinate grid
-        AiS = (Ai @ XS[..., None])[...,0].transpose(3,0,1,2)
-        # resample each component on transformed grid
-        xx = interp(xS, xx[None, ..., None].astype(np.double), AiS).squeeze().numpy()[...,0]
-        yy = interp(xS, yy[None, ..., None].astype(np.double), AiS).squeeze().numpy()[...,0]
-        xy = interp(xS, xy[None, ..., None].astype(np.double), AiS).squeeze().numpy()[...,0]
 
-    S = np.stack((yy, xy, xy, xx), axis=-1)
-    if down:
-        S = resize(S, (S.shape[0]//down, S.shape[1]//down, 4), anti_aliasing=True)
-    S = S.reshape((S.shape[0],S.shape[1],2,2))
-    
-    # transform structure tensors
-    if A is not None:
-        S = A[:2,:2] @ S @ np.transpose(A[:2,:2])  # transform structure tensors
-    
-    return S
-
-def struct_tensor(I, sigma=3, down=0, A=None, all=False):
-    print('calculating image gradients...')
-    # I_x = gaussian_filter1d(I, sigma=sigma, axis=1, order=1)
-    # I_x = gaussian_filter1d(I_x, sigma=sigma, axis=0, order=0)
-    # I_y = gaussian_filter1d(I, sigma=sigma, axis=0, order=1)
-    # I_y = gaussian_filter1d(I_y, sigma=sigma, axis=1, order=0)
-
-    # # construct the structure tensor, s
-    # print('constructing structure tensors...')
-    # S = construct_S(I_y**2, I_x**2,
-    #     I_x*I_y, A=A, down=down)
-    
-    I_y = sobel(I, axis=0)
-    I_x = sobel(I, axis=1)
-
-    # construct the structure tensor, s
-    print('constructing structure tensors...')
-    I_y_sq = gaussian_filter(I_y**2, sigma=sigma)
-    I_x_sq = gaussian_filter(I_x**2, sigma=sigma)
-    I_xy = gaussian_filter(I_x*I_y, sigma=sigma)
-
-    S = construct_S(I_y_sq, I_x_sq,
-        I_xy, A=A, down=down)
-    if all:
-        # construct orientation (theta) and anisotropy index (AI)
-        print('calculating orientations and anisotropy...')
-        d,v = np.linalg.eigh(S)
-
-        # get only principle eigenvectors
-        # max_idx = np.abs(d).argmax(axis=-1)
-        # max_idx = np.ravel(max_idx)
-        # max_idx = np.array([np.arange(max_idx.shape[0]), max_idx])
-        # v = np.moveaxis(v, -1,-2).reshape(-1,2,2)
-        # v = v[max_idx[0],max_idx[1]].reshape(S.shape[0],-1,2)
-        v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue with all being > 0
-        theta = ((np.arctan(v[...,1] / v[...,0])) + np.pi / 2) / np.pi
-        AI = abs(d[...,0] - d[...,1]) / abs(d[...,0] + d[...,1])
-
-        # make hsv image where hue= primary orientation, saturation= anisotropy, value= original image
-        print('constructing hsv image...')
-        
-        if down:
-            I = resize(I, (I.shape[0]//down, I.shape[1]//down), anti_aliasing=True)
-        stack = np.stack([theta,AI,I], -1)
-        hsv = matplotlib.colors.hsv_to_rgb(stack)
-
-        return {'S':S, 'theta':theta, 'AI':AI, 'hsv':hsv}
-    else:
-        return S
-
-def structure_tensor(I, sigma, dI):
+def structure_tensor(I, sigma, dI=1):
     '''
     Construct structure tensors from a grayscale image. Accepts 2D or 3D arrays
 
     Parameters
     ----------
-    I : array_like
+    I : array
         2D or 3D scalar image
     sigma : scalar or sequence of scalars
         Standard deviation for Gaussian kernel. The standard deviations of the Gaussian filter
         are given for each axis as a sequence, or as a single number, in which case it is equal
         for all axes.
-    dI : Tuple
+    dI : int or tuple, optional
         Image pixel dimensions. The derivative and gaussian kernel standard deviation is scaled by the inverse of the pixel size.
+        If int, all dimensions are treated as the same size.
     Returns
     -------
-    S : array_like
+    S : array
         Array of structure tensors with image dimensions along the first axes and tensors in the last two dimensions.
 
     '''
 
     if I.ndim == 2:
-
-        dy = dI[0]
-        dx = dI[1]
+        if type(dI) == int:
+            dy, dx = dI, dI
+        else:
+            dy,dx = dI
 
         I_y = sobel(I, axis=0)/dy
         I_x = sobel(I, axis=1)/dy
@@ -166,10 +75,10 @@ def structure_tensor(I, sigma, dI):
         S = S.reshape((S.shape[:-1]+(2,2)))
 
     elif I.ndim == 3:
-
-        dz = dI[0]
-        dy = dI[1]
-        dx = dI[2]
+        if type(dI) == int:
+            dz,dy,dx = dI, dI, dI
+        else:
+            dz,dy,dx = dI
 
         I_z = sobel(I, axis=0)
         I_y = sobel(I, axis=1)
@@ -188,6 +97,189 @@ def structure_tensor(I, sigma, dI):
 
     return S
 
+def anisotropy(w):
+    """
+    Calculate anisotropy from eigenvalues. Accepts 2 or 3 eigenvalues
+
+    Parameters
+    ----------
+    w : array
+        Array with eigenvalues along the last dimension.
+    
+    Returns
+    --------
+    A : array
+        Array of anisotropy values.
+    """
+
+    if w.shape[-1] == 3:
+        w = w.transpose(3,0,1,2)
+        trace = np.sum(w, axis=0)
+        A = np.sqrt((3/2) * (np.sum((w - (1/3)*trace)**2,axis=0) / np.sum(w**2, axis=0)))
+        A = np.nan_to_num(A)
+        A = A/np.max(A)
+    elif w.shape[-1] == 2:
+        A = abs(w[...,0] - w[...,1]) / abs(w[...,0] + w[...,1])
+    else:
+        raise Exception(f'Accepts 2 or 3 eigenvalues but found {w.shape[-1]}')
+    
+    return A
+
+
+def angles(S):
+    """
+    Compute angles from structure tensors.
+
+    Parameters
+    ----------
+    S : ndarray
+        Structure tensor valued image array.
+    
+    Returns
+    -------
+    angles : ndarray
+        Vector valued image array.
+    """
+    
+    w,v = np.linalg.eigh(S)
+    v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue with all being > 0
+    if len(w) == 2:
+        theta = ((np.arctan(v[...,0] / v[...,1])) + np.pi / 2) / np.pi # row/col gives the counterclockwise angle from left/right direction. Rescaled [-pi/2,pi/2] -> [0,1]
+    else:
+        z = v[...,0]
+        y = v[...,1]
+        x = v[...,2]
+        theta = np.arctan(np.sqrt(x**2 + y**2) / z) # TODO: scale theta and phi appropriately
+        phi = np.arctan(y / x) # range [-pi/2, pi/2]
+
+
+    pass
+
+
+def hsv(S, I):
+    """
+    Compute angles, anisotropy index, and hsv image from 2x2 structure tensors.
+
+    Parameters
+    ----------
+    S : array
+        Array of structure tensors with shape MxNx2x2
+    I : array
+        Image with shape MxN
+
+    Returns
+    -------
+    theta : array
+        Array of angles (counterclockwise from left/right) with shape MxN. Angles were mapped from [-pi/2,pi/2] -> [0,1] for easier visualization.
+    AI : array
+        Array of anisotropy index with shape MxN
+    hsv : array
+        Image with theta -> hue, AI -> saturation, and I -> value (brightness).
+    """
+    # check if I is 2D
+    if I.ndim != 2:
+        raise Exception(f'Only accepts two dimensional images but found {I.ndim} dimensions')
+
+    print('calculating orientations and anisotropy...')
+    w,v = np.linalg.eigh(S)
+
+    # get only principle eigenvectors
+    # max_idx = np.abs(d).argmax(axis=-1)
+    # max_idx = np.ravel(max_idx)
+    # max_idx = np.array([np.arange(max_idx.shape[0]), max_idx])
+    # v = np.moveaxis(v, -1,-2).reshape(-1,2,2)
+    # v = v[max_idx[0],max_idx[1]].reshape(S.shape[0],-1,2)
+    v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue with all being > 0
+    theta = ((np.arctan(v[...,0] / v[...,1])) + np.pi / 2) / np.pi # row/col gives the counterclockwise angle from left/right direction. Rescaled [-pi/2,pi/2] -> [0,1]
+    AI = anisotropy(w) # anisotropy index (AI)
+
+    # make hsv image where hue= primary orientation, saturation= anisotropy, value= original image
+    print('constructing hsv image...')
+    
+    if S.shape[:-2] != I.shape:
+        down = [x//y for x,y in zip(I.shape, S.shape[:-2])]
+        I = resize(I, (I.shape[0]//down[0], I.shape[1]//down[1]), anti_aliasing=True)
+    stack = np.stack([theta,AI,I], -1)
+    hsv = matplotlib.colors.hsv_to_rgb(stack)
+
+    return theta, AI, hsv
+
+
+def transform(S, xS, A, indexing='ij', direction='f'):
+    """
+    Transform structure tensors.
+
+    Parameters
+    ----------
+    S : (...,2,2) array
+        Structure tensor array.
+    xS : list of 1D arrays
+        list of points along each axis.
+    A : array
+        Affine transfrom matrix. May be either one matrix (2,2) or stack of affine matrices (M,2,2).
+    indexing : {'ij', 'xy'}, optional
+        Indexing of transform matrix. Default is 'ij'.
+    direction : {'f', 'b'}, optional
+        Direction of transform. If 'b', the inverse of A is applied.
+
+    Returns
+    -------
+    Sr : (...,2,2) array
+        Registered structure tensor array.
+
+    """
+
+    if S.ndim == 4:
+        xS.insert(0,np.array([0]))
+        S = S[None]
+        A = A[None]
+    S = np.stack((S[...,0,0], S[...,0,1], S[...,1,1]))
+    XS = np.stack(np.meshgrid(xS[0],xS[1], xS[2], indexing='ij'), axis=-1)
+    if indexing == 'xy':
+        A = A[:,[1,0,2]] # first flip the first two rows
+        A = A[:, :, [1,0,2]] # then the first two columns
+    if direction == 'b':
+        A = np.linalg.inv(A)
+    points = (A[:, None, None, :2, :2] @ XS[:A.shape[0], ..., 1:, None])[..., 0] + A[:, None, None, :2, -1]
+    points = points.transpose(-1,0,1,2)
+    points = np.concatenate((np.ones_like(points[0])[None]*xS[0][None,:,None,None], points))
+    Sr = interp(xS, S, points.astype(float))
+    Sr = np.stack((Sr[0],Sr[1],Sr[1],Sr[2]),axis=-1)[0].reshape(Sr.shape[2:]+(2,2))
+
+    return Sr
+
+
+def downsample(S,down):
+    """
+    Downsample structure tensors.
+
+    Parameters
+    ----------
+    S : array
+        Array of structure tensors. Last two dimensons contain 2x2 or 3x3 tensors
+    down : int or list or tuple
+        Downsampling factor.
+    Returns
+    -------
+    S : array
+        Downsampled 
+    """
+
+    S = S.reshape((S.shape[:-2] + (S.shape[-1] * S.shape[-2],)))
+    if S.ndim == 3:
+        if type(down) == int:
+            d0,d1 = down, down
+        else:
+            d0,d1 = down
+        S = resize(S, (S.shape[0]//d0, S.shape[1]//d1, 4), anti_aliasing=True).reshape(S.shape[:-1]+(2,2))
+    elif S.ndim == 4:
+        if type(down) == int:
+            d0,d1,d2 = down,down,down
+        else:
+            d0,d1,d2 = down
+        S = resize(S, (S.shape[0]//d0, S.shape[1]//d1, S.shape[2]//d2, 9), anti_aliasing=True).reshape(S.shape[:-1]+(3,3))
+    return S
+
     
 def odf2d(theta, nbins, tile_size, damping=0.1):
     '''
@@ -197,7 +289,7 @@ def odf2d(theta, nbins, tile_size, damping=0.1):
     Parameters
     ----------
     theta: numpy Array
-        Two dimensional array of angles scaled to the range (0,1).
+        Two dimensional array of angles scaled to the range [0,1].
     nbins: int
         The length of each odf in the output array.
     tile_size: int
@@ -221,11 +313,13 @@ def odf2d(theta, nbins, tile_size, damping=0.1):
     nbits = theta.strides[-1]
     theta = np.lib.stride_tricks.as_strided(theta, shape=(i,j,tile_size,tile_size), strides=(tile_size*theta.shape[1]*nbits,tile_size*nbits,theta.shape[1]*nbits,nbits))
     theta = theta.reshape(i,j,tile_size**2)
+
     print('creating symmetric distribution...')
     # concatenate a copy of theta but with angles in the opposite direction to make the odfs symmetric (since structure tensors are symmetric).
     theta_flip = theta - np.pi
     theta_flip = np.where(theta_flip < -1*np.pi, theta_flip + 2*np.pi, theta_flip)
     theta = np.concatenate((theta,theta_flip), axis=-1)
+
     print('fitting to fourier series...')
     t = np.arange(nbins)*2*np.pi/(nbins-1) - np.pi
     odf = np.apply_along_axis(lambda a: np.histogram(a, bins=t)[0], axis=-1, arr=theta)
@@ -238,12 +332,79 @@ def odf2d(theta, nbins, tile_size, damping=0.1):
 
     return odf
 
-def interp(x,I,phii,**kwargs):
+
+def odf3d(angles, nbins, tile_size, sh_order=8):
     '''
-    Interpolate a 3D image with specified regular voxel locations at specified sample points.
+        Create an array of 3D orientation distribution functions (ODFs) by aggregating the structure tensor angles into tiles.
+        The odf is modeled as a spherical harmonic series fit to the histogram of angles for each tile. The length of the output odf is set to nbins. 
+
+        Parameters
+        ----------
+        angles: ndarray
+            (i,j,k,2) array with angles theta (angle w.r.t. polar axis) and phi (azimuthal angle) in the last dimension.
+        nbins: int
+            Number of bins used to create histogram of angles.
+        tile_size: int
+            The size of the tiles used to aggregate angles. The sample size for each odf will be tile_size^3.
+        sh_order: int
+            Sets the largest spherical harmonic order used to fit to the angles.
+        
+        Returns
+        -------
+        sh_signal: ndarray
+            Spherical harmonic signal valued image array. Contains spherical harmonic coefficients in the last dimension.
+
+        '''
+
+    # aggregate angles
+    i, j, k = [x//tile_size for x in angles.shape[:-1]]
+    angles = np.array(angles[:i*tile_size, :j*tile_size, :k*tile_size]) # crop so angles divides evenly into tile_size (must create a new array to change stride lengths too.)
+    # reshape into tiles by manipulating strides. (np.reshape preserves contiguity of elements, which we don't want in this case)
+    nbits = angles.strides[-1]
+    angles = np.lib.stride_tricks.as_strided(angles, shape=(i, j, k, tile_size, tile_size, tile_size, 2),
+                                            strides=(tile_size*angles.shape[1]*angles.shape[2]*nbits,
+                                                    tile_size*angles.shape[2]*nbits,
+                                                    tile_size*nbits,
+                                                    angles.shape[1]*angles.shape[2]*nbits,
+                                                    angles.shape[2]*nbits,
+                                                    nbits, nbits//2))
+    angles = angles.reshape(i * j * k, tile_size**3, 2)
+    # set up approx. evenly distributed histogram bin points by despersing charges on the surface of a sphere.
+    theta = np.pi * np.random.rand(nbins)
+    phi = 2 * np.pi * np.random.rand(nbins)
+    hsph_initial = HemiSphere(theta=theta, phi=phi)
+
+    hsph_updated, potential = disperse_charges(hsph_initial,2)#, const=0.5)
+    while np.abs(potential[-2]-potential[-1]) > 0.1:
+        hsph_updated, pot = disperse_charges(hsph_updated,2)#, const=0.5)
+        potential = np.append(potential,pot)
+
+    vertices = hsph_updated.vertices
+    bins = np.vstack((vertices,-vertices)) # histogram bin centers
+    N = angles.shape[0] * angles.shape[1] * angles.shape[2] # number of voxels
+    signal = np.zeros((N, len(bins)))
+    # fill in the histogram. For each vector, find the distance to all bin centers, choose the closest bin and add one to it
+    for v in angles[:]:
+        dist = np.arccos(np.dot(vertices,v.T))
+        v_idx = np.argmax(np.abs(np.pi/2 - dist), axis=0) # closest or farthest bin from the vector i.e. closest to v or -v
+        signal[:,v_idx] += 1
+        signal[:,v_idx+len(vertices)] += 1
+
+    # fit spherical harmonics to signal
+    sphere = Sphere(xyz=bins)
+    print(f'Building SH matrix of order {sh_order}')
+    B, invB = sh_to_sf_matrix(sphere, sh_order=sh_order)
+    sh_signal = np.dot(signal, invB)
+    sh_signal = sh_signal.reshape(i, j, k, sh_signal[-1])
+
+    return sh_signal
+
+def interp(x, I, phii, interp2d=False, **kwargs):
+    '''
+    Interpolate an image with specified regular voxel locations at specified sample points.
     
-    Interpolate the 3D image I, with regular grid positions stored in x (1d arrays),
-    at the positions stored in phii (3D arrays with first channel storing component)
+    Interpolate the image I, with regular grid positions stored in x (1d arrays),
+    at the positions stored in phii (3D or 4D arrays with first channel storing component)
     
     Parameters
     ----------
@@ -251,29 +412,33 @@ def interp(x,I,phii,**kwargs):
         x[i] is a numpy array storing the pixel locations of imaging data along the i-th axis.
         Note that this MUST be regularly spaced, only the first and last values are queried.
     I : array
-        Numpy array or torch tensor storing 3D imaging data.  I is a 4D array with 
-        channels along the first axis and spatial dimensions along the last 3 
+        Numpy array or torch tensor storing 2D or 3D imaging data.  In the 3D case, I is a 4D array with 
+        channels along the first axis and spatial dimensions along the last 3. For 2D, I is a 3D array with
+        spatial dimensions along the last 2.
     phii : array
-        Numpy array or torch tensor storing positions of the sample points. phii is a 4D array
+        Numpy array or torch tensor storing positions of the sample points. phii is a 3D or 4D array
         with components along the first axis (e.g. x0,x1,x1) and spatial dimensions 
-        along the last 3.
+        along the last axes.
+    interp2d : bool, optional
+        If True, interpolates a 2D image, otherwise 3D. Default is False (expects a 3D image).
     kwargs : dict
-        Keyword arguments to be passed to the grid sample function. For example
+        keword arguments to be passed to the grid sample function. For example
         to specify interpolation type like nearest.  See pytorch grid_sample documentation.
     
     Returns
     -------
     out : torch tensor
-        4D array storing a 3D image with channels stored along the first axis. 
+        Array storing an image with channels stored along the first axis. 
         This is the input image resampled at the points stored in phii.
-    
-    
+
+
     '''
     # first we have to normalize phii to the range -1,1    
     I = torch.as_tensor(I)
     phii = torch.as_tensor(phii)
     phii = torch.clone(phii)
-    for i in range(3):
+    ndim = 2 if interp2d==True else 3
+    for i in range(ndim):
         phii[i] -= x[i][0]
         phii[i] /= x[i][-1] - x[i][0]
     # note the above maps to 0,1
@@ -281,13 +446,21 @@ def interp(x,I,phii,**kwargs):
     # to 0 2
     phii -= 1.0
     # done
-        
+
     # NOTE I should check that I can reproduce identity
     # note that phii must now store x,y,z along last axis
     # is this the right order?
     # I need to put batch (none) along first axis
     # what order do the other 3 need to be in?    
-    out = grid_sample(I[None],phii.flip(0).permute((1,2,3,0))[None],align_corners=True,**kwargs)
+    # feb 2022
+    if 'padding_mode' not in kwargs:
+        kwargs['padding_mode'] = 'border' # note that default is zero
+    if interp2d==True:
+        phii = phii.flip(0).permute((1,2,0))[None]
+    else:
+        phii = phii.flip(0).permute((1,2,3,0))[None]
+    out = grid_sample(I[None], phii, align_corners=True, **kwargs)
+
     # note align corners true means square voxels with points at their centers
     # post processing, get rid of batch dimension
     out = out[0]
@@ -323,6 +496,7 @@ def read_matrix_data(fname):
     
     return A
 
+# TODO: accept directories to process stacks of images and affines
 def main():
 
     parser = argparse.ArgumentParser()
@@ -336,6 +510,7 @@ def main():
                         help="sigma used for gaussian filter on structure tensor")
     parser.add_argument("-d", "--down", type=int, default=1,
                         help="structure tensor downsampling factor")
+    parser.add_argument("-p","--pixel_size", nargs="+", type=float, default=1.0, help="pixel dimensions")
     parser.add_argument("-r", "--reverse_intensity", action="store_true",
                         help="reverse image intensity, e.g. light on dark to dark on light")
     parser.add_argument('-A', '--affine', help=".txt file storing rigid 3x3 transformation matrix")
@@ -350,9 +525,6 @@ def main():
     else:
         out = os.getcwd()
     
-    if args.affine:
-        with open(args.affine, 'rt') as f:
-            A = read_matrix_data(f)
 
     img_down = args.img_down
     sigma = args.sigma
@@ -360,14 +532,22 @@ def main():
     reverse_intensity = args.reverse_intensity
 
     I = load_img(image, img_down, reverse_intensity)
+    dI = args.pixel_size
+
+    S = structure_tensor(I, sigma, dI=dI)
+    S = downsample(S, down)
+
     if args.all==True:
-        st_out = struct_tensor(I, sigma, down, all=True)
-        S = st_out['S']
-        theta = st_out['theta']
-        AI = st_out['AI']
-        hsv = st_out['hsv']
-    else:
-        S = struct_tensor(I, sigma, down)
+        theta, AI, hsv = hsv(S, I)
+
+    if args.affine:
+        with open(args.affine, 'rt') as f:
+            A = read_matrix_data(f)
+            nS = S.shape[:-2]
+            if type(dI) == float:
+                dI = np.ones(len(nS))*dI
+            xS = [np.arange(n)*d - (n-1)*d/2.0 for n,d in zip(nS,dI)]
+            S = transform(S, xS, A)
 
     # save out structure tensor field
     base = os.path.splitext(os.path.split(image)[1])[0]
