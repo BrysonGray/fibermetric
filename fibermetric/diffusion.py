@@ -1,7 +1,7 @@
 import numpy as np
 import nibabel as nib
 import argparse
-from emlddmm import read_data, interp, draw
+from utils import read_data, interp, draw
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 import os
@@ -12,9 +12,9 @@ import sympy
 from sympy import Ynm, Symbol, integrate
 import pickle
 
-####################################################################################################################################################
+#############################
 # diffusion tensor functions
-####################################################################################################################################################
+#############################
 
 # preservation of principle directions
 def ppd(tensors,J):
@@ -137,7 +137,7 @@ def visualize(T,xT, **kwargs):
         along axis i.  Note these are assumed to be uniformly spaced. The default
         is voxels of size 1.0.
     kwargs : dict
-        Other keywords will be passed on to the emlddmm draw function. For example
+        Other keywords will be passed on to the draw function. For example
         include cmap='gray' for a gray colormap
     
     Returns
@@ -163,10 +163,11 @@ def visualize(T,xT, **kwargs):
 
     return img
 
-####################################################################################################################################################
+####################
 # ODF functions
-####################################################################################################################################################
-def sh_to_cf(sh_signal, ndir, nbins, norm=True):
+####################
+
+def sh_to_cf_numeric(sh_signal, ndir, nbins, norm=True):
     
     """
     integration: add up the values of the function in each bin (holding phi constant),
@@ -215,7 +216,26 @@ def sh_to_cf(sh_signal, ndir, nbins, norm=True):
 
     return cf
 
-def sh_to_cf_symbolic(sh_signal, ndir, source):
+def sh_to_cf(sh_signal, ndir, source):
+    """
+    Integrate ODFs as spherical harmonics over theta (polar angle) using symbolic integrals.
+
+    Parameters
+    ----------
+    sh_signal : numpy array
+         Array of spherical harmonic coefficients.
+         The first dimension must be coefficients, followed by spatial dimensions.
+    ndir : int
+        Number of directions in theta from which to sample for integrating
+    source : str
+        Firectory containing Yphi.p file storing the integrated basis functions.
+    
+    Returns
+    -------
+    cf : numpy array
+        array of discrete functions on a circle with the first dimension being
+        number of bins, followed by the shape of the input spatial dimensions.
+    """
     # set up basis (based on Dipy descoteaux07 basis)
     theta = Symbol("theta")
     phi = Symbol("phi")
@@ -274,7 +294,6 @@ def load_odf(path):
 
     return I
 
-# TODO: add odf processing options to main
 def main():
     # parse arguments
     parser = argparse.ArgumentParser()
