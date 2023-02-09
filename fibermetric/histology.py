@@ -8,7 +8,7 @@ Author: Bryson Gray
 
 '''
 
-from scipy.ndimage import gaussian_filter, sobel
+from scipy.ndimage import gaussian_filter, sobel, correlate1d
 import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2,40).__str__()
 import cv2
@@ -39,7 +39,7 @@ def load_img(impath, img_down=0, reverse_intensity=False):
     return I
 
 
-def structure_tensor(I, sigma, dI=1):
+def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1):
     '''
     Construct structure tensors from a grayscale image. Accepts 2D or 3D arrays
 
@@ -67,32 +67,42 @@ def structure_tensor(I, sigma, dI=1):
         else:
             dy,dx = dI
 
-        I_y = sobel(I, axis=0)/dy
-        I_x = sobel(I, axis=1)/dy
+        Ix = correlate1d(I, np.array([-1,0,1])/2.0/dx, 1)
+        Ix = gaussian_filter(Ix, sigma=[derivative_sigma/dy, derivative_sigma/dx])
+        Iy = correlate1d(I, np.array([-1,0,1])/2.0/dy, 0)
+        Iy = gaussian_filter(Iy, sigma=[derivative_sigma/dy, derivative_sigma/dx])
 
         # construct the structure tensor, s
-        yy = gaussian_filter(I_y**2, sigma=sigma/dy)
-        xx = gaussian_filter(I_x**2, sigma=sigma/dx)
-        xy = gaussian_filter(I_x*I_y, sigma=sigma/(dx*dy))
-        S = np.stack((yy, xy, xy, xx), axis=-1)
+        Ixx = gaussian_filter(Ix*Ix, sigma=[tensor_sigma/dy, tensor_sigma/dx])
+        Ixy = gaussian_filter(Ix*Iy, sigma=[tensor_sigma/dy, tensor_sigma/dx])
+        Iyy = gaussian_filter(Iy*Iy, sigma=[tensor_sigma/dy, tensor_sigma/dx])
+
+        # S = np.stack((Iyy, Ixy, Ixy, Ixx), axis=-1)
+        S = np.stack((Ixx,Ixy,Ixy,Iyy), axis=-1)
         S = S.reshape((S.shape[:-1]+(2,2)))
 
     elif I.ndim == 3:
         if type(dI) == int:
-            dz,dy,dx = dI, dI, dI
+            dz, dy, dx = dI, dI, dI
         else:
-            dz,dy,dx = dI
+            dz, dy, dx = dI
 
-        I_z = sobel(I, axis=0)
-        I_y = sobel(I, axis=1)
-        I_x = sobel(I, axis=2)
-        zz = gaussian_filter(I_z**2, sigma=sigma/dz)
-        yy = gaussian_filter(I_y**2, sigma=sigma/dy)
-        xx = gaussian_filter(I_x**2, sigma=sigma/dx)
-        zy = gaussian_filter(I_z*I_y, sigma=sigma/(dz*dy))
-        zx = gaussian_filter(I_z*I_x, sigma=sigma/(dz*dx))
-        yx = gaussian_filter(I_x*I_y, sigma=sigma/(dy*dx))
-        S = np.stack((zz, zy, zx, zy, yy, yx, zx, yx, xx), axis=-1)
+        Ix = correlate1d(I, np.array([-1,0,1])/2.0/dx, 2)
+        Ix = gaussian_filter(Ix, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
+        Iy = correlate1d(I,np.array([-1,0,1])/2.0/dy,1)
+        Iy = gaussian_filter(Iy, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
+        Iz = correlate1d(I, np.array([-1,0,1])/2.0/dz, 0)
+        Iz = gaussian_filter(Iz, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
+
+        Ixx = gaussian_filter(Ix*Ix, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
+        Iyy = gaussian_filter(Iy*Iy, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
+        Izz = gaussian_filter(Iz*Iz, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
+        Ixy = gaussian_filter(Ix*Iy, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
+        Ixz = gaussian_filter(Ix*Iz, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
+        Iyz = gaussian_filter(Iy*Iz, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
+
+        # S = np.stack((Izz, Iyz, Ixz, Iyz, Iyy, Ixy, Ixz, Ixy, Ixx), axis=-1)
+        S = np.stack((Ixx, Ixy, Ixz, Ixy, Iyy, Iyz, Ixz, Iyz, Izz), axis=-1)
         S = S.reshape((S.shape[:-1]+(3,3)))
     else:
         raise Exception(f'Input must be a 2 or 3 dimensional array but found: {I.ndim}')
@@ -192,7 +202,9 @@ def hsv(S, I):
     # v = np.moveaxis(v, -1,-2).reshape(-1,2,2)
     # v = v[max_idx[0],max_idx[1]].reshape(S.shape[0],-1,2)
     v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue with all being > 0
-    theta = ((np.arctan(v[...,0] / v[...,1])) + np.pi / 2) / np.pi # row/col gives the counterclockwise angle from left/right direction. Rescaled [-pi/2,pi/2] -> [0,1]
+    # theta = ((np.arctan(v[...,0] / v[...,1])) + np.pi / 2) / np.pi
+    theta = ((np.arctan(v[...,1] / v[...,0])) + np.pi / 2) / np.pi # TODO: verify this is correct since changing S component order. 
+    # row/col gives the counterclockwise angle from left/right direction. Rescaled [-pi/2,pi/2] -> [0,1]
     AI = anisotropy(w) # anisotropy index (AI)
 
     # make hsv image where hue= primary orientation, saturation= anisotropy, value= original image
