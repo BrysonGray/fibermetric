@@ -19,7 +19,7 @@ import argparse
 import h5py
 from dipy.core.sphere import disperse_charges, Sphere, HemiSphere
 from dipy.reconst.shm import sh_to_sf_matrix
-from utils import interp, read_matrix_data
+from fibermetric.utils import interp, read_matrix_data
 
 
 
@@ -60,17 +60,21 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1):
         Array of structure tensors with image dimensions along the first axes and tensors in the last two dimensions.
 
     '''
-
     if I.ndim == 2:
-        if type(dI) == int:
+        if type(dI) == float:
             dy, dx = dI, dI
         else:
             dy,dx = dI
 
-        Ix = correlate1d(I, np.array([-1,0,1])/2.0/dx, 1)
-        Ix = gaussian_filter(Ix, sigma=[derivative_sigma/dy, derivative_sigma/dx])
-        Iy = correlate1d(I, np.array([-1,0,1])/2.0/dy, 0)
-        Iy = gaussian_filter(Iy, sigma=[derivative_sigma/dy, derivative_sigma/dx])
+        Ix =  gaussian_filter(I, sigma=[derivative_sigma/dy, derivative_sigma/dx], order=(0,1))
+        # Ix = correlate1d(I, np.array([-1,0,1])/2.0/dx, 1)
+        # Ix = gaussian_filter(Ix, sigma=[derivative_sigma/dy, derivative_sigma/dx])
+        Iy =  gaussian_filter(I, sigma=[derivative_sigma/dy, derivative_sigma/dx], order=(1,0))
+        # Iy = correlate1d(I, np.array([-1,0,1])/2.0/dy, 0)
+        # Iy = gaussian_filter(Iy, sigma=[derivative_sigma/dy, derivative_sigma/dx])
+        norm = np.sqrt(Ix**2 + Iy**2)
+        Ix = Ix / norm
+        Iy = Iy / norm
 
         # construct the structure tensor, s
         Ixx = gaussian_filter(Ix*Ix, sigma=[tensor_sigma/dy, tensor_sigma/dx])
@@ -78,21 +82,29 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1):
         Iyy = gaussian_filter(Iy*Iy, sigma=[tensor_sigma/dy, tensor_sigma/dx])
 
         # S = np.stack((Iyy, Ixy, Ixy, Ixx), axis=-1)
-        S = np.stack((Ixx,Ixy,Ixy,Iyy), axis=-1)
+        S = np.stack((1-Ixx,-Ixy,-Ixy,1-Iyy), axis=-1) # identity minus the structure tensor
         S = S.reshape((S.shape[:-1]+(2,2)))
 
     elif I.ndim == 3:
-        if type(dI) == int:
+        if type(dI) == float:
             dz, dy, dx = dI, dI, dI
         else:
             dz, dy, dx = dI
 
-        Ix = correlate1d(I, np.array([-1,0,1])/2.0/dx, 2)
-        Ix = gaussian_filter(Ix, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
-        Iy = correlate1d(I,np.array([-1,0,1])/2.0/dy,1)
-        Iy = gaussian_filter(Iy, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
-        Iz = correlate1d(I, np.array([-1,0,1])/2.0/dz, 0)
-        Iz = gaussian_filter(Iz, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
+        Ix =  gaussian_filter(I, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx], order=(0,0,1))
+        # Ix = correlate1d(I, np.array([-1,0,1])/2.0/dx, 2)
+        # Ix = gaussian_filter(Ix, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
+        Iy =  gaussian_filter(I, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx], order=(0,1,0))
+        # Iy = correlate1d(I,np.array([-1,0,1])/2.0/dy,1)
+        # Iy = gaussian_filter(Iy, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
+        Iz =  gaussian_filter(I, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx], order=(1,0,0))
+        # Iz = correlate1d(I, np.array([-1,0,1])/2.0/dz, 0)
+        # Iz = gaussian_filter(Iz, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
+
+        norm = np.sqrt(Ix**2 + Iy**2 + Iz**2)
+        Ix = Ix / norm
+        Iy = Iy / norm
+        Iz = Iz / norm
 
         Ixx = gaussian_filter(Ix*Ix, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
         Iyy = gaussian_filter(Iy*Iy, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
@@ -102,7 +114,7 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1):
         Iyz = gaussian_filter(Iy*Iz, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
 
         # S = np.stack((Izz, Iyz, Ixz, Iyz, Iyy, Ixy, Ixz, Ixy, Ixx), axis=-1)
-        S = np.stack((Ixx, Ixy, Ixz, Ixy, Iyy, Iyz, Ixz, Iyz, Izz), axis=-1)
+        S = np.stack((1-Ixx, -Ixy, -Ixz, -Ixy, 1-Iyy, -Iyz, -Ixz, -Iyz, 1-Izz), axis=-1)
         S = S.reshape((S.shape[:-1]+(3,3)))
     else:
         raise Exception(f'Input must be a 2 or 3 dimensional array but found: {I.ndim}')
@@ -150,22 +162,21 @@ def angles(S):
     Returns
     -------
     angles : ndarray
-        Vector valued image array.
+        Array of values between -pi/2 and pi/2.
     """
     
     w,v = np.linalg.eigh(S)
     v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue with all being > 0
-    if len(w) == 2:
-        theta = ((np.arctan(v[...,0] / v[...,1])) + np.pi / 2) / np.pi # row/col gives the counterclockwise angle from left/right direction. Rescaled [-pi/2,pi/2] -> [0,1]
+    if w.shape[-1] == 2:
+        theta = (np.arctan(v[...,1] / (v[...,0] + np.finfo(float).eps))) # row/col gives the counterclockwise angle from left/right direction.
+        return (theta,)
     else:
-        z = v[...,0]
+        x = v[...,0]
         y = v[...,1]
-        x = v[...,2]
-        theta = np.arctan(np.sqrt(x**2 + y**2) / z) # TODO: scale theta and phi appropriately
-        phi = np.arctan(y / x) # range [-pi/2, pi/2]
-
-
-    pass
+        z = v[...,2]
+        theta = np.arctan(-z / (np.sqrt(x**2 + y**2) + np.finfo(float).eps)) + np.pi / 2  # range is (0,pi)
+        phi = np.arctan(y / (x + np.finfo(float).eps)) # range (-pi/2, pi/2)
+        return (theta,phi)
 
 
 def hsv(S, I):
@@ -303,7 +314,7 @@ def odf2d(theta, nbins, tile_size, damping=0.1):
     Parameters
     ----------
     theta: numpy Array
-        Two dimensional array of angles scaled to the range [0,1].
+        Two dimensional array of angles. ( range [-pi/2,pi/2] )
     nbins: int
         The length of each odf in the output array.
     tile_size: int
@@ -318,7 +329,6 @@ def odf2d(theta, nbins, tile_size, damping=0.1):
 
     '''
     print('reshaping...')
-    theta = theta*np.pi - np.pi/2 # transform (0,1) -> (-pi/2,pi/2)
     # reshape theta so the last two dimensions are shape (patch_size, patch_size)
     # it will have to be cropped if the number of pixels on each dimension doesn't divide evenly into patch_size
     i, j = [x//tile_size for x in theta.shape]
