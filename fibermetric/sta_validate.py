@@ -238,77 +238,75 @@ def parallel_lines_2d(thetas, nI, dI, width=2, noise=0.1, period=6):
     return I, labels, extent
 
 def parallel_lines_3d(thetas, nI, dI, width=2, noise=0.1, period=6):
-   """
-    Draw a sequence of parallel lines with specified period, line width, and angle.
+#    """
+#     Draw a sequence of parallel lines with specified period, line width, and angle.
 
-    Parameters
-    ----------
-    thetas: list
-        angles at which to draw line patterns.
-    nI: tuple of int
-    dI: tuple of float
-    width: int
+#     Parameters
+#     ----------
+#     thetas: list
+#         angles at which to draw line patterns.
+#     nI: tuple of int
+#     dI: tuple of float
+#     width: int
     
-    Returns
-    -------
-    I: numpy array
-    labels: numpy array
-    extent: tuple
+#     Returns
+#     -------
+#     I: numpy array
+#     labels: numpy array
+#     extent: tuple
 
-    """
-    # create the image with added noise and the mask and labels
-    np.random.seed(1)
-    I = np.random.randn(*nI)*noise
-    labels = np.zeros_like(I)
-    # we will need to convert the coordinates with centered origin to array indices
-    worldtogrid = lambda p,dI,nI : tuple((x/d + (n-1)/2).astype(int) for x,d,n in zip(p,dI,nI))
+#     """
+#     # create the image with added noise and the mask and labels
+#     np.random.seed(1)
+#     I = np.random.randn(*nI)*noise
+#     labels = np.zeros_like(I)
+#     # we will need to convert the coordinates with centered origin to array indices
+#     worldtogrid = lambda p,dI,nI : tuple((x/d + (n-1)/2).astype(int) for x,d,n in zip(p,dI,nI))
 
-    # get the borders of the image
-    pad = int(width*np.sqrt(2))
-    borders_padded = np.array([((n-1+2*pad)/2)*d for n,d in zip(nI,dI)])
-    borders =  np.array([((n-1)/2)*d for n,d in zip(nI,dI)]) # borders are in the defined coordinate system
-    # define line endpoints for each field of parallel lines.
-    for i in range(len(thetas)):
-        I_ = np.zeros([n + 2*pad for n in nI]) #  We need a padded image so line drawing does not go out of borders. It will be cropped at the end.
-        theta = thetas[i]
-        x_step = np.cos(theta+np.pi/2)*period
-        y_step = np.sin(theta+np.pi/2)*period
-        cy = 0
-        cx = 0
-        start, end, _ = get_endpoints(borders_padded, theta, p0=(cy,cx))
-        lines = [(start,end)] # list of parallel lines as tuples (startpoint, endpoint)
-        while 1:
-            cy += y_step
-            cx += x_step
-            start, end, out_of_bounds = get_endpoints(borders_padded, theta, p0=(cy,cx))
-            if out_of_bounds:
-                break
-            else:
-                lines += [(start,end)]
-            start, end, out_of_bounds = get_endpoints(borders_padded, theta, p0=(-cy,-cx))
-            if out_of_bounds:
-                break
-            else:
-                lines += [(start,end)]
+#     # get the borders of the image
+#     pad = int(width*np.sqrt(2))
+#     borders_padded = np.array([((n-1+2*pad)/2)*d for n,d in zip(nI,dI)])
+#     borders =  np.array([((n-1)/2)*d for n,d in zip(nI,dI)]) # borders are in the defined coordinate system
+#     # define line endpoints for each field of parallel lines.
+#     for i in range(len(thetas)):
+#         I_ = np.zeros([n + 2*pad for n in nI]) #  We need a padded image so line drawing does not go out of borders. It will be cropped at the end.
+#         theta = thetas[i]
+#         x_step = np.cos(theta+np.pi/2)*period
+#         y_step = np.sin(theta+np.pi/2)*period
+#         cy = 0
+#         cx = 0
+#         start, end, _ = get_endpoints(borders_padded, theta, p0=(cy,cx))
+#         lines = [(start,end)] # list of parallel lines as tuples (startpoint, endpoint)
+#         while 1:
+#             cy += y_step
+#             cx += x_step
+#             start, end, out_of_bounds = get_endpoints(borders_padded, theta, p0=(cy,cx))
+#             if out_of_bounds:
+#                 break
+#             else:
+#                 lines += [(start,end)]
+#             start, end, out_of_bounds = get_endpoints(borders_padded, theta, p0=(-cy,-cx))
+#             if out_of_bounds:
+#                 break
+#             else:
+#                 lines += [(start,end)]
 
-        for j in range(len(lines)):
-            start = lines[j][0]
-            end = lines[j][1]
-            start_point = worldtogrid(start, dI, nI)
-            end_point = worldtogrid(end, dI, nI)
-            # print(start_point,end_point)
-            I_ = draw_line(I_, start_point, end_point, w=width, dI=dI)
-        # add to labels wherever lines don't intersect
-        # zero out intersections
-        labels_ = theta * (np.where(I_[pad:-pad, pad:-pad],1,0) - np.where(I,1,0))
-        labels += np.where(labels_ < 0, 0.0, labels_) # negatives must be reset to zero
-        I += I_[pad:-pad, pad:-pad]
-    extent = (-borders[1]-dI[1]/2, borders[1]+dI[1]/2, borders[0]+dI[0]/2, -borders[0]-dI[0]/2)
+#         for j in range(len(lines)):
+#             start = lines[j][0]
+#             end = lines[j][1]
+#             start_point = worldtogrid(start, dI, nI)
+#             end_point = worldtogrid(end, dI, nI)
+#             # print(start_point,end_point)
+#             I_ = draw_line(I_, start_point, end_point, w=width, dI=dI)
+#         # add to labels wherever lines don't intersect
+#         # zero out intersections
+#         labels_ = theta * (np.where(I_[pad:-pad, pad:-pad],1,0) - np.where(I,1,0))
+#         labels += np.where(labels_ < 0, 0.0, labels_) # negatives must be reset to zero
+#         I += I_[pad:-pad, pad:-pad]
+#     extent = (-borders[1]-dI[1]/2, borders[1]+dI[1]/2, borders[0]+dI[0]/2, -borders[0]-dI[0]/2)
             
-    return I, labels, extent
-
+#     return I, labels, extent
     pass
-
 
 
 def circle(radius, nI, dI, width=1, noise=0.05, blur=1.0): #, mask_thresh=0.5):
