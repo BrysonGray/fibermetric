@@ -38,6 +38,7 @@ def draw_line(image, start_point, end_point, w=1, dI=(1.0,1.0)):
     y1 = end_point[0]
 
     steep = abs(y1 - y0) > abs(x1 - x0)
+    # print(f'steep: {steep}')
     if steep:
         # swap x and y
         x0,y0 = y0,x0
@@ -53,11 +54,13 @@ def draw_line(image, start_point, end_point, w=1, dI=(1.0,1.0)):
     if dx == 0:
         gradient = 1.0
     else:
-        gradient = dy/dx
+        gradient = dy/dx  #*dI[0]/dI[1]
 
     # Get the vertical component of the line width to find the number of pixels between the top and bottom edge of the line.
-    w = w * np.sqrt(1 + (gradient*dI[0]/dI[1])**2) / dI[0] # Here we use the identity 1 + tan^2 = sec^2
-
+    # w = w * np.sqrt(1 + (gradient*dI[0]/dI[1])**2) / dI[0] # Here we use the identity 1 + tan^2 = sec^2
+    w = w * np.sqrt(1 + gradient**2)/ dI[0]
+    # print(f'dI[0] = {dI[0]}')
+    # print(f'w after rotation: {int(w)+1}')
     Ix0 = x0
     Ix1 = x1
     y_intercept = y0
@@ -67,18 +70,18 @@ def draw_line(image, start_point, end_point, w=1, dI=(1.0,1.0)):
             image[x, int(y_intercept)] = 1-y_intercept%1
             # we want to draw lines with thickness
             # fill pixels with ones between the top and bottom
-            for i in range(1,int(w)):
+            for i in range(1,int(w)+1):
                 image[x, int(y_intercept) + i] = 1.0
-            image[x, int(y_intercept) + int(w)] = y_intercept%1 # TODO: fix wrap around issue that arises here.
+            image[x, int(y_intercept) + int(w)+1] = y_intercept%1
             y_intercept += gradient
             x += 1
     else:
         x = Ix0
         while x <= Ix1:
             image[int(y_intercept), x] = 1-y_intercept%1
-            for i in range(1,int(w)):
+            for i in range(1,int(w)+1):
                 image[int(y_intercept) + i, x] = 1.0
-            image[int(y_intercept) + int(w), x] = y_intercept%1
+            image[int(y_intercept) + int(w)+1, x] = y_intercept%1
             y_intercept += gradient
             x += 1
     return image
@@ -193,12 +196,13 @@ def parallel_lines_2d(thetas, nI, dI, width=2, noise=0.1, period=6):
     worldtogrid = lambda p,dI,nI : tuple((x/d + (n-1)/2).astype(int) for x,d,n in zip(p,dI,nI))
 
     # get the borders of the image
-    pad = int(width*np.sqrt(2))
-    borders_padded = np.array([((n-1+2*pad)/2)*d for n,d in zip(nI,dI)])
+    pad = int(width*np.sqrt(2)/min(dI))+1#*np.max(dI)/np.min(dI))
+    nI_padded = [n+2*pad for n in nI]
+    borders_padded = np.array([((n-1)/2)*d for n,d in zip(nI_padded,dI)])
     borders =  np.array([((n-1)/2)*d for n,d in zip(nI,dI)]) # borders are in the defined coordinate system
     # define line endpoints for each field of parallel lines.
     for i in range(len(thetas)):
-        I_ = np.zeros([n + 2*pad for n in nI]) #  We need a padded image so line drawing does not go out of borders. It will be cropped at the end.
+        I_ = np.zeros(nI_padded) #  We need a padded image so line drawing does not go out of borders. It will be cropped at the end.
         theta = thetas[i]
         x_step = np.cos(theta+np.pi/2)*period
         y_step = np.sin(theta+np.pi/2)*period
@@ -223,9 +227,12 @@ def parallel_lines_2d(thetas, nI, dI, width=2, noise=0.1, period=6):
         for j in range(len(lines)):
             start = lines[j][0]
             end = lines[j][1]
+            print(start,end)
             start_point = worldtogrid(start, dI, nI)
             end_point = worldtogrid(end, dI, nI)
-            # print(start_point,end_point)
+            # start_point = worldtogrid(start, dI, nI_padded)
+            # end_point = worldtogrid(end, dI, nI_padded)
+            print(start_point,end_point)
             I_ = draw_line(I_, start_point, end_point, w=width, dI=dI)
         # TODO: this does not give the desired labels. Intersections must be zero or None.
         # add to labels wherever lines don't intersect
