@@ -14,7 +14,9 @@ from fibermetric import histology
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter,sobel,correlate1d,gaussian_filter1d
+import scipy
 import cv2
+import itertools
 
 
 def draw_line(image, start_point, end_point, w=1, dI=(1.0,1.0)):
@@ -38,7 +40,6 @@ def draw_line(image, start_point, end_point, w=1, dI=(1.0,1.0)):
     y1 = end_point[0]
 
     steep = abs(y1 - y0) > abs(x1 - x0)
-    # print(f'steep: {steep}')
     if steep:
         # swap x and y
         x0,y0 = y0,x0
@@ -59,8 +60,7 @@ def draw_line(image, start_point, end_point, w=1, dI=(1.0,1.0)):
     # Get the vertical component of the line width to find the number of pixels between the top and bottom edge of the line.
     # w = w * np.sqrt(1 + (gradient*dI[0]/dI[1])**2) / dI[0] # Here we use the identity 1 + tan^2 = sec^2
     w = w * np.sqrt(1 + gradient**2)/ dI[0]
-    # print(f'dI[0] = {dI[0]}')
-    # print(f'w after rotation: {int(w)+1}')
+
     Ix0 = x0
     Ix1 = x1
     y_intercept = y0
@@ -169,7 +169,7 @@ def get_endpoints(img_borders, theta, p0):
     return startpoint, endpoint, out_of_bounds
 
 
-def parallel_lines_2d(thetas, nI, dI, width=2, noise=0.1, period=6):
+def parallel_lines_2d(thetas, nI, period=6, width=2, noise=0.1):
     """
     Draw a sequence of parallel lines with specified period, line width, and angle.
 
@@ -188,6 +188,7 @@ def parallel_lines_2d(thetas, nI, dI, width=2, noise=0.1, period=6):
     extent: tuple
 
     """
+    dI = [nI[1]/nI[0], 1.0]
     # create the image with added noise and the mask and labels
     np.random.seed(1)
     I = np.random.randn(*nI)*noise
@@ -227,98 +228,27 @@ def parallel_lines_2d(thetas, nI, dI, width=2, noise=0.1, period=6):
         for j in range(len(lines)):
             start = lines[j][0]
             end = lines[j][1]
-            print(start,end)
             start_point = worldtogrid(start, dI, nI)
             end_point = worldtogrid(end, dI, nI)
             # start_point = worldtogrid(start, dI, nI_padded)
             # end_point = worldtogrid(end, dI, nI_padded)
-            print(start_point,end_point)
             I_ = draw_line(I_, start_point, end_point, w=width, dI=dI)
-        # TODO: this does not give the desired labels. Intersections must be zero or None.
-        # add to labels wherever lines don't intersect
-        # zero out intersections
-        labels_ = theta * (np.where(I_[pad:-pad, pad:-pad],1,0) - np.where(I,1,0))
-        labels += np.where(labels_ < 0, 0.0, labels_) # negatives must be reset to zero
+        labels += theta * np.where(I_[pad:-pad, pad:-pad],1,0)
         I += I_[pad:-pad, pad:-pad]
+    mask = np.where(I==1, 1.0, 0.0)
+    labels = labels * mask
     extent = (-borders[1]-dI[1]/2, borders[1]+dI[1]/2, borders[0]+dI[0]/2, -borders[0]-dI[0]/2)
             
     return I, labels, extent
 
 def parallel_lines_3d(thetas, nI, dI, width=2, noise=0.1, period=6):
-#    """
-#     Draw a sequence of parallel lines with specified period, line width, and angle.
-
-#     Parameters
-#     ----------
-#     thetas: list
-#         angles at which to draw line patterns.
-#     nI: tuple of int
-#     dI: tuple of float
-#     width: int
-    
-#     Returns
-#     -------
-#     I: numpy array
-#     labels: numpy array
-#     extent: tuple
-
-#     """
-#     # create the image with added noise and the mask and labels
-#     np.random.seed(1)
-#     I = np.random.randn(*nI)*noise
-#     labels = np.zeros_like(I)
-#     # we will need to convert the coordinates with centered origin to array indices
-#     worldtogrid = lambda p,dI,nI : tuple((x/d + (n-1)/2).astype(int) for x,d,n in zip(p,dI,nI))
-
-#     # get the borders of the image
-#     pad = int(width*np.sqrt(2))
-#     borders_padded = np.array([((n-1+2*pad)/2)*d for n,d in zip(nI,dI)])
-#     borders =  np.array([((n-1)/2)*d for n,d in zip(nI,dI)]) # borders are in the defined coordinate system
-#     # define line endpoints for each field of parallel lines.
-#     for i in range(len(thetas)):
-#         I_ = np.zeros([n + 2*pad for n in nI]) #  We need a padded image so line drawing does not go out of borders. It will be cropped at the end.
-#         theta = thetas[i]
-#         x_step = np.cos(theta+np.pi/2)*period
-#         y_step = np.sin(theta+np.pi/2)*period
-#         cy = 0
-#         cx = 0
-#         start, end, _ = get_endpoints(borders_padded, theta, p0=(cy,cx))
-#         lines = [(start,end)] # list of parallel lines as tuples (startpoint, endpoint)
-#         while 1:
-#             cy += y_step
-#             cx += x_step
-#             start, end, out_of_bounds = get_endpoints(borders_padded, theta, p0=(cy,cx))
-#             if out_of_bounds:
-#                 break
-#             else:
-#                 lines += [(start,end)]
-#             start, end, out_of_bounds = get_endpoints(borders_padded, theta, p0=(-cy,-cx))
-#             if out_of_bounds:
-#                 break
-#             else:
-#                 lines += [(start,end)]
-
-#         for j in range(len(lines)):
-#             start = lines[j][0]
-#             end = lines[j][1]
-#             start_point = worldtogrid(start, dI, nI)
-#             end_point = worldtogrid(end, dI, nI)
-#             # print(start_point,end_point)
-#             I_ = draw_line(I_, start_point, end_point, w=width, dI=dI)
-#         # add to labels wherever lines don't intersect
-#         # zero out intersections
-#         labels_ = theta * (np.where(I_[pad:-pad, pad:-pad],1,0) - np.where(I,1,0))
-#         labels += np.where(labels_ < 0, 0.0, labels_) # negatives must be reset to zero
-#         I += I_[pad:-pad, pad:-pad]
-#     extent = (-borders[1]-dI[1]/2, borders[1]+dI[1]/2, borders[0]+dI[0]/2, -borders[0]-dI[0]/2)
-            
-#     return I, labels, extent
     pass
 
 
-def circle(radius, nI, dI, width=1, noise=0.05, blur=1.0): #, mask_thresh=0.5):
+def circle(nI, period=6, width=1, noise=0.05, blur=0.0, min_radius=4): #, mask_thresh=0.5):
     # create an isotropic image first and downsample later
     # get largest dimension
+    dI = [nI[1]/nI[0], 1.0]
     maxdim = np.argmax(nI)
     nIiso  = [nI[maxdim]]*len(nI)
     xI = [np.arange(n) - (n-1)//2 for n in nIiso]
@@ -326,8 +256,10 @@ def circle(radius, nI, dI, width=1, noise=0.05, blur=1.0): #, mask_thresh=0.5):
     theta = np.arctan(XI[:,::-1,1]/(XI[:,::-1,0]+np.finfo(float).eps))
     I = np.random.randn(*nIiso)*noise
     I_ = np.zeros_like(I)
-    for i in range(len(radius)):
-        I_ = cv2.circle(I_,(nI[maxdim]//2, nI[maxdim]//2),radius=radius[i], thickness=width, color=(1))
+    max_radius = np.sqrt(nI[1]**2/2)
+    radii = np.arange(min_radius, max_radius, period, dtype=int)
+    for i in range(len(radii)):
+        I_ = cv2.circle(I_,(nI[maxdim]//2, nI[maxdim]//2),radius=radii[i], thickness=width, color=(1))
     mask = np.where(I_ > 0.0, 1.0, 0.0)
     labels = theta*mask*(180/np.pi)
     I = I_+I
@@ -349,7 +281,7 @@ def ring():
     pass
 
 
-def anisotropy_correction(image, mask, labels, dI, direction='up', interpolation=cv2.INTER_LINEAR):
+def anisotropy_correction(image, labels, dI, direction='up', interpolation=cv2.INTER_LINEAR):
 
     # downsample all dimensions to largest dimension or upsample to the smallest dimension.
     if direction == 'down':
@@ -358,12 +290,115 @@ def anisotropy_correction(image, mask, labels, dI, direction='up', interpolation
         dim = np.argmin(dI)
     dsize = [image.shape[dim]]*len(image.shape)
     image_corrected = cv2.resize(image, dsize=dsize, interpolation=interpolation)
-    mask_corrected = cv2.resize(mask, dsize=dsize, interpolation=cv2.INTER_NEAREST)
-    mask_corrected = np.where(mask_corrected > 0.0, 1.0, 0.0)
-    labels_corrected = cv2.resize(labels, dsize=dsize, interpolation=cv2.INTER_NEAREST)
+    # mask_corrected = cv2.resize(mask, dsize=dsize, interpolation=cv2.INTER_NEAREST)
+    # mask_corrected = np.where(mask_corrected > 0.0, 1.0, 0.0)
+    labels_corrected = cv2.resize(labels, dsize=dsize, interpolation=interpolation)
     dI = [dI[dim]]*len(image.shape)
     xI = [(np.arange(n) - (n-1)/2)*d for n,d in zip(image_corrected.shape,dI)]
     extent = (xI[1][0]-dI[1]/2, xI[1][-1]+dI[1]/2, xI[0][-1]+dI[0]/2, xI[0][0]-dI[0]/2) # TODO: generalize for 3D case
 
 
-    return image_corrected, mask_corrected, labels_corrected, extent
+    return image_corrected, labels_corrected, extent
+
+def _make_list(a, length):
+    if not isinstance(a, list):
+        a = [a]*length
+    elif len(a) == 1:
+        a = a*length
+    return a
+
+def grid_tests(dim, derivative_sigma, tensor_sigma, nI, period=6, thetas=None, width=1, noise=0.05, phantom='grid', err_type='pixelwise'):
+    """Test structure tensor analysis on a grid of crossing lines.
+    Parameters
+    ----------
+    dim : int or list of int
+        Number of dimensions.
+    derivative_sigma : list, float
+        Sigma for the derivative filter.
+    tensor_sigma : list, float
+        Sigma for the structure tensor filter.
+    nI : list, tuple of int
+        Number of pixels in each dimension.
+    thetas : list, tuple of float
+        Angles of the lines in radians. One angle for 2D, two angles for 3D.
+    width : list, int
+        Width of the lines.
+    noise : float
+        Noise level.
+    blur : float
+        Blur level.
+    period : int
+        Space between lines.
+    phantom : ['grid', 'circles']
+        Phantom type
+    err_type : ['pixelwise', 'piecewise']
+        Pixelwise returns average angular difference per pixel. 
+        Piecewise divides the image into pieces and fits each group of pixels to an ODF from which peaks are computed and compared to ground truth.
+    
+    Returns
+    -------
+    test_results : pandas.DataFrame
+        Results of the test.
+
+    """
+    error = []
+    if dim == 2:
+        # if some arguments are a single value, make them a list of length equal to len(derivative_sigma)
+        nI = _make_list(nI, len(derivative_sigma))
+        period = _make_list(period, len(derivative_sigma))
+        width = _make_list(width, len(derivative_sigma))
+        noise = _make_list(noise, len(derivative_sigma))
+        for i in range(len(derivative_sigma)):
+            dI = (nI[i][1]/nI[i][0], 1.0)
+            assert phantom in ('grid', 'circles')
+            if phantom == 'grid':
+                assert isinstance(thetas, (list, tuple)), 'thetas must be a list or tuple of angles when using a grid phantom.'
+                # ensure a set of angles for each phantom generated
+                if not isinstance(thetas[0], (list,tuple)):
+                    thetas = thetas * len(derivative_sigma)
+                thetas_ = thetas[i]
+                I, labels, extent = parallel_lines_2d(thetas_, nI[i], width=width[i], noise=noise[i], period=period[i])
+            elif phantom == 'circles':
+                I, labels, extent = circle(nI[i], period=period[i], width=width[i], noise=noise[i])
+            # apply anisotropy correction
+            I, labels, extent = anisotropy_correction(I, labels, dI)
+            # compute structure tensor and angles
+            S = histology.structure_tensor(I, derivative_sigma=derivative_sigma[i], tensor_sigma=tensor_sigma[i], dI=dI)
+            angles = histology.angles(S)[0]
+            assert err_type in ('pixelwise', 'piecewise')
+            if err_type == 'pixelwise':
+                # count number of angles that are not none
+                nangles = np.sum(~np.isnan(angles))
+                # compute the average difference between computed angles and labels
+                # get angles where not none
+                angles_ = angles[~np.isnan(angles)]
+                labels_ = labels[~np.isnan(angles)]
+                error.append(np.sum((angles_ - labels_)) / nangles) # average error in radians
+            elif err_type == 'piecewise':
+                odf, sample_points = histology.odf2d(angles, nbins=100, tile_size=250)
+                odf_peaks = np.apply_along_axis(lambda a: scipy.signal.find_peaks(a, prominence=0.005)[0], axis=-1, arr=odf)
+                # take only angles in the range -pi/2, pi/2
+                peaks = np.apply_along_axis(lambda a: [p for p in sample_points[a] if p >= -np.pi/2 and p <= np.pi/2 ], axis=-1, arr=odf_peaks)
+                assert peaks.shape[-1] == len(thetas_), 'number of peaks detected does not equal the number of angles in the image'
+                thetas.sort() # peaks are already be in order from least to greatest
+                # for thetas_perm in list(itertools.permutations(thetas)):
+                # err_odf.append(np.sum(np.abs(peaks - thetas), axis=-1) / len(thetas))
+                # err_odf = err_odf[np.argmin([np.sum(x) for x in err_odf])]
+                error.append( np.sum(np.abs(peaks - thetas_)) / peaks.shape )
+
+    return error
+
+
+def circles_test():
+    pass
+
+def run_tests(run_all=True, tests={'grid', 'circles'}):
+    if run_all:
+        grid_test()
+        circles_test()
+    else:
+        if 'grid' in tests:
+            grid_test()
+        if 'circles' in tests:
+            circles_test()
+    

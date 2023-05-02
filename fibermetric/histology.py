@@ -9,6 +9,10 @@ Author: Bryson Gray
 '''
 
 from scipy.ndimage import gaussian_filter, sobel, correlate1d
+from scipy.stats import vonmises
+from scipy.special import iv
+from scipy.optimize import fsolve, minimize
+from sklearn.cluster import KMeans
 import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2,40).__str__()
 import cv2
@@ -20,7 +24,7 @@ import h5py
 from dipy.core.sphere import disperse_charges, Sphere, HemiSphere
 from dipy.reconst.shm import sh_to_sf_matrix
 from fibermetric.utils import interp, read_matrix_data
-
+import matplotlib.pyplot as plt
 
 
 def load_img(impath, img_down=0, reverse_intensity=False):
@@ -66,13 +70,13 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1):
         else:
             dy,dx = dI
 
-        Ix =  gaussian_filter(I, sigma=[derivative_sigma/dy, derivative_sigma/dx], order=(0,1))
+        Ix =  gaussian_filter(I, sigma=[derivative_sigma/dy, derivative_sigma/dx], order=(0,1)) / dI[1]
         # Ix = correlate1d(I, np.array([-1,0,1])/2.0/dx, 1)
         # Ix = gaussian_filter(Ix, sigma=[derivative_sigma/dy, derivative_sigma/dx])
-        Iy =  gaussian_filter(I, sigma=[derivative_sigma/dy, derivative_sigma/dx], order=(1,0))
+        Iy =  gaussian_filter(I, sigma=[derivative_sigma/dy, derivative_sigma/dx], order=(1,0)) / dI[0]
         # Iy = correlate1d(I, np.array([-1,0,1])/2.0/dy, 0)
         # Iy = gaussian_filter(Iy, sigma=[derivative_sigma/dy, derivative_sigma/dx])
-        norm = np.sqrt(Ix**2 + Iy**2)
+        norm = np.sqrt(Ix**2 + Iy**2) + np.finfo(float).eps
         Ix = Ix / norm
         Iy = Iy / norm
 
@@ -83,6 +87,8 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1):
 
         # S = np.stack((Iyy, Ixy, Ixy, Ixx), axis=-1)
         S = np.stack((1-Ixx,-Ixy,-Ixy,1-Iyy), axis=-1) # identity minus the structure tensor
+        # null out the structure tensor where the norm is too small
+        S[norm < 0.001] = None
         S = S.reshape((S.shape[:-1]+(2,2)))
 
     elif I.ndim == 3:
@@ -101,7 +107,7 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1):
         # Iz = correlate1d(I, np.array([-1,0,1])/2.0/dz, 0)
         # Iz = gaussian_filter(Iz, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
 
-        norm = np.sqrt(Ix**2 + Iy**2 + Iz**2)
+        norm = np.sqrt(Ix**2 + Iy**2 + Iz**2) + np.finfo(float).eps
         Ix = Ix / norm
         Iy = Iy / norm
         Iz = Iz / norm
@@ -337,7 +343,6 @@ def odf2d(theta, nbins, tile_size, damping=0.1):
     nbits = theta.strides[-1]
     theta = np.lib.stride_tricks.as_strided(theta, shape=(i,j,tile_size,tile_size), strides=(tile_size*theta.shape[1]*nbits,tile_size*nbits,theta.shape[1]*nbits,nbits))
     theta = theta.reshape(i,j,tile_size**2)
-
     print('creating symmetric distribution...')
     # concatenate a copy of theta but with angles in the opposite direction to make the odfs symmetric (since structure tensors are symmetric).
     theta_flip = theta - np.pi
@@ -345,8 +350,11 @@ def odf2d(theta, nbins, tile_size, damping=0.1):
     theta = np.concatenate((theta,theta_flip), axis=-1)
 
     print('fitting to fourier series...')
-    t = np.arange(nbins)*2*np.pi/(nbins-1) - np.pi
-    odf = np.apply_along_axis(lambda a: np.histogram(a, bins=t)[0], axis=-1, arr=theta)
+    # t = np.arange(nbins)*2*np.pi/(nbins-1) - np.pi
+    # odf = np.apply_along_axis(lambda a: np.histogram(a, bins=t)[0], axis=-1, arr=theta)
+    odf = np.apply_along_axis(lambda a: np.histogram(a[~np.isnan(a)], bins=nbins, range=(-np.pi,np.pi))[0], axis=-1, arr=theta)
+    step = 2*np.pi/nbins
+    sample_points = np.linspace(-np.pi+step/2, np.pi-step/2, nbins)
     odf_F = np.fft.rfft(odf)
     n = np.arange(odf_F.shape[-1])
     odf_F = odf_F * np.exp(-1*damping*n) # apply damping
@@ -354,8 +362,179 @@ def odf2d(theta, nbins, tile_size, damping=0.1):
     odf = odf / np.sum(odf, axis=-1)[...,None] # normalize to make this a pdf
     print('done')
 
-    return odf
+    return odf, sample_points
 
+# TODO: do not keep this function. It is copied from the internet.
+def vonmises_density(x: np.array, mu: np.array, kappa: np.array) -> np.array:
+    """
+    Calculate the von Mises density for a series x (a 1D numpy.array).
+    
+    Input | Type | Details
+    -- | -- | --
+    x | a 1D numpy.array of size L |
+    mu | a 1D numpy.array of size n | the mean of the von Mises distributions
+    kappa | a 1D numpy.array of size n | the dispersion of the von Mises distributions
+    
+    Output : 
+        a (L x n) numpy array, L is the length of the series, and n is the size of the array containing the parameters. Each row of the output corresponds to a density
+    """    
+    not_normalized_density = np.array([np.exp(kappa*np.cos(i-mu)) for i in x])
+    norm = 2*np.pi*iv(0,kappa)
+    _density = not_normalized_density/norm
+    return _density
+
+
+def vonmises_mixture(thetas, n_components=2, max_iter=100, tol=1e-5, verbose=False):
+    """
+    Function to fit a mixture of von mises distributions to a histogram of angles.
+    """
+    # initialize parameters
+    n = len(thetas)
+    bins = np.linspace(-np.pi, np.pi, n)
+    # use k-means to initialize mu and kappa
+    kmeans = KMeans(n_clusters=n_components, random_state=0).fit(thetas.reshape(-1,1))
+    mu = kmeans.cluster_centers_.reshape(-1)
+    if verbose:
+        print('inital means: ', mu)
+    kappa = np.random.random(n_components)
+    pi = np.random.random(n_components)
+    pi = pi / np.sum(pi)
+    # run EM algorithm
+    for i in range(max_iter):
+        # E-step
+        p = np.zeros((n, n_components)) # p is the posterior probability of each component
+        # for j in range(n_components):
+        #     p[:, j] = pi[j] * vonmises_density(bins*2, mu[j]*2, kappa[j]) # multiply by 2 to convert from [-pi/2,pi/2] to [-pi,pi]
+        p = pi * vonmises_density(bins, mu, kappa) # multiply by 2 to convert from [-pi/2,pi/2] to [-pi,pi]
+        p = p / np.sum(p, axis=1)[:, None]
+        if verbose:
+        # plot the initial posterior probabilities for each class
+            if i == 0:
+                fig,ax = plt.subplots(1,1,subplot_kw=dict(projection='polar'))
+                for j in range(n_components):
+                    ax.plot(bins, p[:,j], label='component {}'.format(j))
+                ax.set_title('posterior probabilities')
+            if i % 1 == 0:
+                for j in range(n_components):
+                    ax.plot(bins, p[:,0], label='component {}'.format(j))
+                plt.draw()
+        # M-step
+        # pi_new is the mean of the posterior probabilities
+        pi_new = np.mean(p, axis=0)
+        # mu_new = np.arctan2(np.sin(thetas) @ p, np.cos(thetas) @ p) / 2 # divide by 2 to convert from [-pi,pi] to [-pi/2,pi/2]
+        # c = np.cos(thetas) @ (p * np.cos(mu_new*2)) + np.sin(thetas) @ (p * np.sin(mu_new*2))
+        mu_new = np.arctan2(np.sin(thetas) @ p, np.cos(thetas) @ p)
+        c = np.cos(thetas) @ (p * np.cos(mu_new)) + np.sin(thetas) @ (p * np.sin(mu_new))
+        k = lambda kappa: (c - iv(1, kappa) / iv(0, kappa) * np.sum(p, axis=0)).reshape(n_components)
+        kappa_new = fsolve(k, np.zeros(n_components))
+
+        # check for convergence
+        if np.allclose(mu, mu_new, rtol=tol) and np.allclose(kappa, kappa_new, rtol=tol) and np.allclose(pi, pi_new, rtol=tol):
+            if verbose:
+                print(f'Converged after {i+1} iterations.')
+            break
+        else:
+            mu = mu_new
+            kappa = kappa_new
+            pi = pi_new
+    else:
+        if verbose:
+            print(f'Did not converge after {max_iter} iterations.')
+    return mu, kappa, pi
+
+
+def softmax(x):
+    e_x = np.exp(x - np.max(x))
+    return e_x / e_x.sum(axis=0)
+    
+
+def _vm_log_likelihood(theta, *data):
+    # assert len(theta)%3 == 0, 'theta must be a list of length 3n. For n components, theta must contain mu, kappa, and pi for each component.'
+    data = data[0]
+    mu = theta[::3]
+    kappa = theta[1::3]
+    pi = theta[2::3]
+    pi_0 = 1-np.sum(pi)
+    pi = np.concatenate((pi,[pi_0]))
+    pi = softmax(pi)
+    p = np.zeros((len(data), len(mu)))
+    for i in range(len(mu)):
+        p[:,i] = pi[i] * vonmises.pdf(data*2, kappa[i], loc=mu[i]*2)
+    prob_total = np.sum(p, axis=1)
+    # take the log of the sum of the posterior probabilities
+    log_likelihood = np.sum(np.log(prob_total))
+
+    return -log_likelihood
+    
+
+def vm_maximum_likelihood(sample_angles, n_components=2, verbose=False):
+    """
+    Calculate the maximum likelihood estimate of the von mises mixture model.
+    """
+    # initialize parameters using k-means
+    kmeans = KMeans(n_clusters=n_components, random_state=0).fit(sample_angles.reshape(-1,1))
+    mu = kmeans.cluster_centers_.reshape(-1)
+    if verbose:
+        print('inital means: ', mu)
+    kappa = np.ones(n_components)
+    pi = [1/n_components] * (n_components-1)
+    theta = np.concatenate((mu,kappa,pi))
+    # run the optimization
+    result = minimize(_vm_log_likelihood, theta, args=(sample_angles), method='L-BFGS-B', options={'disp': verbose})
+    mu = result.x[::3]
+    kappa = result.x[1::3]
+    pi = result.x[2::3]
+    pi_0 = 1-np.sum(pi)
+    pi = np.concatenate((pi,[pi_0]))
+    pi = softmax(pi)
+
+    return mu, kappa, pi
+
+    
+def odf2d_vonmises(theta, nbins, tile_size, n_components=2, verbose=False):
+    """   
+    Create an array of 2D orientation distribution functions (ODFs) by aggregating the structure tensor angles (theta) into tiles.
+    The odf is modeled as a mixture of von mises distributions fit to the histogram of angles for each tile. The length of the output odf is set to nbins.
+
+    Parameters
+    ----------
+    theta: numpy Array
+        Two dimensional array of angles. ( range [-pi/2,pi/2] )
+    nbins: int
+        The length of each odf in the output array.
+    tile_size: int
+        The size of the tiles used to aggregate angles. The sample size for each odf will be tile_size^2.
+    n_components: int
+        The number of von mises distributions to fit to each tile. (default=2)
+    """
+
+    print('reshaping...')
+    # flatten theta so the last two dimensions are shape (patch_size, patch_size)
+    # it will have to be cropped if the number of pixels on each dimension doesn't divide evenly into patch_size
+    i, j = [x//tile_size for x in theta.shape]
+    theta = np.array(theta[:i*tile_size,:j*tile_size]) # crop so theta divides evenly into tile_size (must create a new array to change stride lengths too.)
+    # reshape into tiles by manipulating strides. (np.reshape preserves contiguity of elements, which we don't want in this case)
+    nbits = theta.strides[-1]
+    theta = np.lib.stride_tricks.as_strided(theta, shape=(i,j,tile_size,tile_size), strides=(tile_size*theta.shape[1]*nbits,tile_size*nbits,theta.shape[1]*nbits,nbits))
+    theta = theta.reshape(i,j,tile_size**2)
+    odf = np.zeros((theta.shape[0],theta.shape[1], nbins))
+
+    # for each tile, fit a mixture of von mises distributions to the histogram of angles.
+    print('fitting to von mises distributions...')
+    for i in range(theta.shape[0]):
+        for j in range(theta.shape[1]):
+            # fit a mixture of von mises distributions to the histogram of angles
+            # mu, kappa, pi = vonmises_mixture(theta[i,j,:], n_components=n_components, verbose=verbose)
+            mu, kappa, pi = vm_maximum_likelihood(theta[i,j,:][~np.isnan(theta[i,j,:])], n_components=n_components, verbose=verbose)
+            # create an odf from the fitted parameters
+            for k in range(n_components):
+                # odf[i,j,:] += pi[k] * vonmises_density(np.linspace(-np.pi, np.pi, nbins), mu[k]*2, kappa[k]) # multiply mu by 2 to convert from [-pi/2,pi/2] to [-pi,pi]
+                odf[i,j,:] += vonmises.pdf(np.linspace(-np.pi, np.pi, nbins), kappa[k], loc=mu[k]*2)
+            odf[i,j,:] = odf[i,j,:] / np.sum(odf[i,j,:]) # normalize to make this a pdf
+            print('done')
+        
+            
+    return odf, mu, kappa, pi
 
 def odf3d(angles, nbins, tile_size, sh_order=8):
     '''
