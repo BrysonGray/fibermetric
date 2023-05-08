@@ -209,7 +209,7 @@ def hsv(S, I):
     if I.ndim != 2:
         raise Exception(f'Only accepts two dimensional images but found {I.ndim} dimensions')
 
-    print('calculating orientations and anisotropy...')
+    # print('calculating orientations and anisotropy...')
     w,v = np.linalg.eigh(S)
 
     # get only principle eigenvectors
@@ -225,7 +225,7 @@ def hsv(S, I):
     AI = anisotropy(w) # anisotropy index (AI)
 
     # make hsv image where hue= primary orientation, saturation= anisotropy, value= original image
-    print('constructing hsv image...')
+    # print('constructing hsv image...')
     
     if S.shape[:-2] != I.shape:
         down = [x//y for x,y in zip(I.shape, S.shape[:-2])]
@@ -334,7 +334,7 @@ def odf2d(theta, nbins, tile_size, damping=0.1):
         array of ODFs with each ODF representing the distribution of angles in a patch of theta with size equal to tile_size^2.
 
     '''
-    print('reshaping...')
+    # print('reshaping...')
     # reshape theta so the last two dimensions are shape (patch_size, patch_size)
     # it will have to be cropped if the number of pixels on each dimension doesn't divide evenly into patch_size
     i, j = [x//tile_size for x in theta.shape]
@@ -343,13 +343,13 @@ def odf2d(theta, nbins, tile_size, damping=0.1):
     nbits = theta.strides[-1]
     theta = np.lib.stride_tricks.as_strided(theta, shape=(i,j,tile_size,tile_size), strides=(tile_size*theta.shape[1]*nbits,tile_size*nbits,theta.shape[1]*nbits,nbits))
     theta = theta.reshape(i,j,tile_size**2)
-    print('creating symmetric distribution...')
+    # print('creating symmetric distribution...')
     # concatenate a copy of theta but with angles in the opposite direction to make the odfs symmetric (since structure tensors are symmetric).
     theta_flip = theta - np.pi
     theta_flip = np.where(theta_flip < -1*np.pi, theta_flip + 2*np.pi, theta_flip)
     theta = np.concatenate((theta,theta_flip), axis=-1)
 
-    print('fitting to fourier series...')
+    # print('fitting to fourier series...')
     # t = np.arange(nbins)*2*np.pi/(nbins-1) - np.pi
     # odf = np.apply_along_axis(lambda a: np.histogram(a, bins=t)[0], axis=-1, arr=theta)
     odf = np.apply_along_axis(lambda a: np.histogram(a[~np.isnan(a)], bins=nbins, range=(-np.pi,np.pi))[0], axis=-1, arr=theta)
@@ -360,7 +360,7 @@ def odf2d(theta, nbins, tile_size, damping=0.1):
     odf_F = odf_F * np.exp(-1*damping*n) # apply damping
     odf = np.fft.irfft(odf_F, nbins)
     odf = odf / np.sum(odf, axis=-1)[...,None] # normalize to make this a pdf
-    print('done')
+    # print('done')
 
     return odf, sample_points
 
@@ -508,7 +508,7 @@ def odf2d_vonmises(theta, nbins, tile_size, n_components=2, verbose=False):
         The number of von mises distributions to fit to each tile. (default=2)
     """
 
-    print('reshaping...')
+    # print('reshaping...')
     # flatten theta so the last two dimensions are shape (patch_size, patch_size)
     # it will have to be cropped if the number of pixels on each dimension doesn't divide evenly into patch_size
     i, j = [x//tile_size for x in theta.shape]
@@ -520,7 +520,7 @@ def odf2d_vonmises(theta, nbins, tile_size, n_components=2, verbose=False):
     odf = np.zeros((theta.shape[0],theta.shape[1], nbins))
 
     # for each tile, fit a mixture of von mises distributions to the histogram of angles.
-    print('fitting to von mises distributions...')
+    # print('fitting to von mises distributions...')
     for i in range(theta.shape[0]):
         for j in range(theta.shape[1]):
             # fit a mixture of von mises distributions to the histogram of angles
@@ -531,7 +531,7 @@ def odf2d_vonmises(theta, nbins, tile_size, n_components=2, verbose=False):
                 # odf[i,j,:] += pi[k] * vonmises_density(np.linspace(-np.pi, np.pi, nbins), mu[k]*2, kappa[k]) # multiply mu by 2 to convert from [-pi/2,pi/2] to [-pi,pi]
                 odf[i,j,:] += vonmises.pdf(np.linspace(-np.pi, np.pi, nbins), kappa[k], loc=mu[k]*2)
             odf[i,j,:] = odf[i,j,:] / np.sum(odf[i,j,:]) # normalize to make this a pdf
-            print('done')
+            # print('done')
         
             
     return odf, mu, kappa, pi

@@ -16,8 +16,8 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter,sobel,correlate1d,gaussian_filter1d
 import scipy
 import cv2
-import itertools
-
+import pandas as pd
+from tqdm.contrib import itertools as tqdm_itertools
 
 def draw_line(image, start_point, end_point, w=1, dI=(1.0,1.0)):
     """Xiaolin Wu's line drawing algorithm.
@@ -193,6 +193,7 @@ def parallel_lines_2d(thetas, nI, period=6, width=2, noise=0.1):
     np.random.seed(1)
     I = np.random.randn(*nI)*noise
     labels = np.zeros_like(I)
+    mask = np.zeros_like(I)
     # we will need to convert the coordinates with centered origin to array indices
     worldtogrid = lambda p,dI,nI : tuple((x/d + (n-1)/2).astype(int) for x,d,n in zip(p,dI,nI))
 
@@ -233,9 +234,11 @@ def parallel_lines_2d(thetas, nI, period=6, width=2, noise=0.1):
             # start_point = worldtogrid(start, dI, nI_padded)
             # end_point = worldtogrid(end, dI, nI_padded)
             I_ = draw_line(I_, start_point, end_point, w=width, dI=dI)
-        labels += theta * np.where(I_[pad:-pad, pad:-pad],1,0)
+        mask_ = np.where(I_[pad:-pad, pad:-pad],1,0)
+        labels += theta * mask_
+        mask += mask_
         I += I_[pad:-pad, pad:-pad]
-    mask = np.where(I==1, 1.0, 0.0)
+    mask = np.where(mask==1, 1.0, 0.0)
     labels = labels * mask
     extent = (-borders[1]-dI[1]/2, borders[1]+dI[1]/2, borders[0]+dI[0]/2, -borders[0]-dI[0]/2)
             
@@ -274,7 +277,7 @@ def circle(nI, period=6, width=1, noise=0.05, blur=0.0, min_radius=4): #, mask_t
     xI = [(np.arange(n) - (n-1)//2)*d for n,d in zip(nI,dI)]
     extent = (xI[1][0]-dI[1]/2, xI[1][-1]+dI[1]/2, xI[0][-1]+dI[0]/2, xI[0][0]-dI[0]/2)
 
-    return I, mask, labels, extent
+    return I, labels, extent
 
 
 def ring():
@@ -292,7 +295,11 @@ def anisotropy_correction(image, labels, dI, direction='up', interpolation=cv2.I
     image_corrected = cv2.resize(image, dsize=dsize, interpolation=interpolation)
     # mask_corrected = cv2.resize(mask, dsize=dsize, interpolation=cv2.INTER_NEAREST)
     # mask_corrected = np.where(mask_corrected > 0.0, 1.0, 0.0)
+    thetas = np.unique(labels)
     labels_corrected = cv2.resize(labels, dsize=dsize, interpolation=interpolation)
+    # set all values in labels_corrected to the nearest value in thetas
+    label_ids = np.abs(labels_corrected[:, :, None] - thetas[None, None, :]).argmin(axis=2)
+    labels_corrected = thetas[label_ids]
     dI = [dI[dim]]*len(image.shape)
     xI = [(np.arange(n) - (n-1)/2)*d for n,d in zip(image_corrected.shape,dI)]
     extent = (xI[1][0]-dI[1]/2, xI[1][-1]+dI[1]/2, xI[0][-1]+dI[0]/2, xI[0][0]-dI[0]/2) # TODO: generalize for 3D case
@@ -300,28 +307,22 @@ def anisotropy_correction(image, labels, dI, direction='up', interpolation=cv2.I
 
     return image_corrected, labels_corrected, extent
 
-def _make_list(a, length):
-    if not isinstance(a, list):
-        a = [a]*length
-    elif len(a) == 1:
-        a = a*length
-    return a
 
-def grid_tests(dim, derivative_sigma, tensor_sigma, nI, period=6, thetas=None, width=1, noise=0.05, phantom='grid', err_type='pixelwise'):
+def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.05, phantom='grid', err_type='pixelwise', grid_thetas=None, tile_size=None, dim=2, display=False):
     """Test structure tensor analysis on a grid of crossing lines.
     Parameters
     ----------
-    dim : int or list of int
+    dim : int
         Number of dimensions.
     derivative_sigma : list, float
         Sigma for the derivative filter.
-    tensor_sigma : list, float
+    tensor_sigma : float
         Sigma for the structure tensor filter.
-    nI : list, tuple of int
+    nI : tuple of int
         Number of pixels in each dimension.
-    thetas : list, tuple of float
-        Angles of the lines in radians. One angle for 2D, two angles for 3D.
-    width : list, int
+    grid_thetas : tuple of float
+        Angles of the lines in radians. One angle for 2D, two angles (polar and azimuthal) for 3D.
+    width : int
         Width of the lines.
     noise : float
         Noise level.
@@ -337,68 +338,286 @@ def grid_tests(dim, derivative_sigma, tensor_sigma, nI, period=6, thetas=None, w
     
     Returns
     -------
-    test_results : pandas.DataFrame
-        Results of the test.
+    error : float
+        Average angular difference between ground truth and estimated angles for pixelwise error, or jensen-shannon divergence for piecewise error.
 
     """
-    error = []
     if dim == 2:
-        # if some arguments are a single value, make them a list of length equal to len(derivative_sigma)
-        nI = _make_list(nI, len(derivative_sigma))
-        period = _make_list(period, len(derivative_sigma))
-        width = _make_list(width, len(derivative_sigma))
-        noise = _make_list(noise, len(derivative_sigma))
-        for i in range(len(derivative_sigma)):
-            dI = (nI[i][1]/nI[i][0], 1.0)
-            assert phantom in ('grid', 'circles')
-            if phantom == 'grid':
-                assert isinstance(thetas, (list, tuple)), 'thetas must be a list or tuple of angles when using a grid phantom.'
-                # ensure a set of angles for each phantom generated
-                if not isinstance(thetas[0], (list,tuple)):
-                    thetas = thetas * len(derivative_sigma)
-                thetas_ = thetas[i]
-                I, labels, extent = parallel_lines_2d(thetas_, nI[i], width=width[i], noise=noise[i], period=period[i])
-            elif phantom == 'circles':
-                I, labels, extent = circle(nI[i], period=period[i], width=width[i], noise=noise[i])
-            # apply anisotropy correction
-            I, labels, extent = anisotropy_correction(I, labels, dI)
-            # compute structure tensor and angles
-            S = histology.structure_tensor(I, derivative_sigma=derivative_sigma[i], tensor_sigma=tensor_sigma[i], dI=dI)
-            angles = histology.angles(S)[0]
-            assert err_type in ('pixelwise', 'piecewise')
-            if err_type == 'pixelwise':
-                # count number of angles that are not none
-                nangles = np.sum(~np.isnan(angles))
-                # compute the average difference between computed angles and labels
-                # get angles where not none
-                angles_ = angles[~np.isnan(angles)]
-                labels_ = labels[~np.isnan(angles)]
-                error.append(np.sum((angles_ - labels_)) / nangles) # average error in radians
-            elif err_type == 'piecewise':
-                odf, sample_points = histology.odf2d(angles, nbins=100, tile_size=250)
-                odf_peaks = np.apply_along_axis(lambda a: scipy.signal.find_peaks(a, prominence=0.005)[0], axis=-1, arr=odf)
-                # take only angles in the range -pi/2, pi/2
-                peaks = np.apply_along_axis(lambda a: [p for p in sample_points[a] if p >= -np.pi/2 and p <= np.pi/2 ], axis=-1, arr=odf_peaks)
-                assert peaks.shape[-1] == len(thetas_), 'number of peaks detected does not equal the number of angles in the image'
-                thetas.sort() # peaks are already be in order from least to greatest
-                # for thetas_perm in list(itertools.permutations(thetas)):
-                # err_odf.append(np.sum(np.abs(peaks - thetas), axis=-1) / len(thetas))
-                # err_odf = err_odf[np.argmin([np.sum(x) for x in err_odf])]
-                error.append( np.sum(np.abs(peaks - thetas_)) / peaks.shape )
+        dI = (nI[1]/nI[0], 1.0)
+        assert phantom in ('grid', 'circles')
+        if phantom == 'grid':
+            assert isinstance(grid_thetas, (list, tuple)), 'grid_thetas must be a list or tuple of angles when using a grid phantom.'
+            I, labels, extent = parallel_lines_2d(grid_thetas, nI, width=width, noise=noise, period=period)
+        elif phantom == 'circles':
+            I, labels, extent = circle(nI, period=period, width=width, noise=noise)
+        # apply anisotropy correction
+        I, labels, extent = anisotropy_correction(I, labels, dI)
+        # compute structure tensor and angles
+        S = histology.structure_tensor(I, derivative_sigma=derivative_sigma, tensor_sigma=tensor_sigma, dI=dI)
+        angles = histology.angles(S)[0]
+        assert err_type in ('pixelwise', 'piecewise')
+        if err_type == 'pixelwise':
+            # count number of angles that are not none
+            nangles = np.sum(~np.isnan(angles))
+            # compute the average difference between computed angles and labels
+            # get angles where not none
+            angles_ = angles[~np.isnan(angles)]
+            labels_ = labels[~np.isnan(angles)]
+            error = (np.sum((angles_ - labels_)) / nangles) # average error in radians
+        elif err_type == 'piecewise':
+            if tile_size is None:
+                tile_size = nI[1] // 10 # default to ~100 tiles in the image
+            odf, sample_points = histology.odf2d(angles, nbins=100, tile_size=tile_size)
+            # compare odf to the ground truth distribution using jenson-shannon divergence.
+            # the ground truth is a distribution of delta functions at the angles of the lines.
+            thetas_symmetric = np.concatenate((grid_thetas, np.array(grid_thetas) + np.pi))
+            thetas_symmetric = np.where(thetas_symmetric > np.pi, thetas_symmetric - 2*np.pi, thetas_symmetric)
+            ground_truth = np.zeros(odf.shape[-1])
+            ground_truth[np.digitize(thetas_symmetric, sample_points)] = 1.0 / len(thetas_symmetric)
+            # ground_truth = gaussian_filter(ground_truth, sigma=1)
+            js = np.apply_along_axis(lambda a: scipy.spatial.distance.jensenshannon(a, ground_truth), axis=-1, arr=odf)
+            error = np.mean(js)
+        
+        if display:
+            fig, ax = plt.subplots(1,3, figsize=(12,4))
+            ax[0].imshow(I, extent=extent)
+            ax[0].set_title('Image')
+            ax[1].imshow(labels, extent=extent)
+            ax[1].set_title('Ground Truth')
+            ax[2].imshow(angles, extent=extent)
+            ax[2].set_title('Angles')
+            plt.show()
+
+            # # The below method produces errors because scipy.signal.find_peaks does not always find the exact number of peaks as thetas.
+            # odf_peaks = np.apply_along_axis(lambda a: scipy.signal.find_peaks(a, prominence=0.005)[0], axis=-1, arr=odf)
+            # # take only angles in the range -pi/2, pi/2
+            # peaks = np.apply_along_axis(lambda a: [p for p in sample_points[a] if p >= -np.pi/2 and p <= np.pi/2 ], axis=-1, arr=odf_peaks)
+            # assert peaks.shape[-1] == len(thetas), 'number of peaks detected does not equal the number of angles in the image'
+            # thetas.sort() # peaks are already be in order from least to greatest
+            # error.append( np.sum(np.abs(peaks - thetas)) / peaks.shape )
 
     return error
 
 
-def circles_test():
-    pass
-
-def run_tests(run_all=True, tests={'grid', 'circles'}):
-    if run_all:
-        grid_test()
-        circles_test()
-    else:
-        if 'grid' in tests:
-            grid_test()
-        if 'circles' in tests:
-            circles_test()
+def run_tests(derivative_sigmas, tensor_sigmas, nIs, periods=[6], widths=[1], noises=[0.05], phantom='grid', err_type='pixelwise', grid_thetas=[None], tile_size=None, dim=2):
+    error_df = pd.DataFrame({'derivative_sigma':[], 'tensor_sigma':[], 'nI':[], 'period':[], 'width':[], 'noise':[], 'phantom':[], 'error type':[], 'grid thetas':[], 'tile size':[], 'dimensions':[], 'error':[]})
+    # ensure all arguments are lists
+    if not isinstance(derivative_sigmas, (list, tuple, np.ndarray)):
+        derivative_sigmas = [derivative_sigmas]
+    if not isinstance(tensor_sigmas, (list, tuple, np.ndarray)):
+        tensor_sigmas = [tensor_sigmas]
+    if not isinstance(nIs[0], (list, tuple, np.ndarray)):
+        nIs = [nIs]
+    if not isinstance(periods, (list, tuple, np.ndarray)):
+        periods = [periods]
+    if not isinstance(grid_thetas[0], (list, tuple, np.ndarray)):
+        grid_thetas = [grid_thetas]
+    if not isinstance(widths, (list, tuple, np.ndarray)):
+        widths = [widths]
+    if not isinstance(noises, (list, tuple, np.ndarray)):
+        noises = [noises]
     
+    for i1,i2,i3,i4,i5,i6,i7 in tqdm_itertools.product(range(len(derivative_sigmas)), range(len(tensor_sigmas)), range(len(nIs)), range(len(periods)), range(len(widths)), range(len(noises)), range(len(grid_thetas))):
+        derivative_sigma = derivative_sigmas[i1]
+        tensor_sigma = tensor_sigmas[i2]
+        nI = nIs[i3]
+        period = periods[i4]
+        width = widths[i5]
+        noise = noises[i6]
+        thetas = grid_thetas[i7]
+        error = phantom_test(derivative_sigma, tensor_sigma, nI, period, width, noise, phantom, err_type, thetas, tile_size, dim)
+        new_row = {'derivative_sigma': derivative_sigma, 'tensor_sigma': tensor_sigma, 'nI': [nI], 'period': period, 'width': width, 'noise': noise, 'phantom': phantom, 'error type': err_type, 'grid thetas': [thetas], 'tile size': tile_size, 'dimensions': dim, 'error': error}
+        error_df = pd.concat([error_df, pd.DataFrame(new_row)], ignore_index=True)
+    return error_df
+
+    
+
+
+# scratch
+############################################################################################################################################################################
+
+# # if some arguments are a single value, make them a list of length equal to len(derivative_sigma)
+# nI = _make_list(nI, len(derivative_sigma))
+# period = _make_list(period, len(derivative_sigma))
+# width = _make_list(width, len(derivative_sigma))
+# noise = _make_list(noise, len(derivative_sigma))
+# if thetas is not None:
+#     thetas = _make_list(thetas, len(derivative_sigma))
+
+# def _make_list(a, length):
+#     if not isinstance(a, list):
+#         a = [a]*length
+#     elif len(a) == 1:
+#         a = a*length
+#     return a
+
+# Python3 code for generating points on a 3-D line
+# using Bresenham's Algorithm
+
+# def synthetic2d(thetas: tuple, nI: tuple[int], dI: tuple[float], width: int= 2, noise: float=0.1, blur=1.0, mask_thresh: float=0.1):
+#     xI = [(np.arange(n) - (n-1)/2)*d for n,d in zip(nI,dI)]
+#     xmax = xI[1][-1]
+#     ymax = xI[0][-1]
+#     np.random.seed(1)
+#     I = np.random.randn(*nI)*noise
+#     mask = np.zeros_like(I)
+#     labels = np.zeros_like(I)
+#     worldtogrid = lambda p,dI,nI : tuple(np.round(x/d + (n-1)/2).astype(int) for x,d,n in zip(p,dI,nI))
+#     for i in range(len(thetas)):
+#         theta = thetas[i]
+#         m = np.tan(theta)
+#         y0 = m*xmax
+#         y1 = -y0
+#         x0 = ymax/(m+np.finfo(float).eps)
+#         x1 = -x0
+#         if np.abs(x0) > xmax:
+#             x0 = xmax
+#             x1 = -xmax
+#         elif np.abs(y0) > ymax:
+#             y0 = ymax
+#             y1 = -ymax
+#         j0,i0 = worldtogrid((y0,x0),dI,nI)
+#         j1,i1 = worldtogrid((y1,x1),dI,nI)
+#         start_point = (i0,j0)
+#         end_point = (i1,j1)
+#         I_ = cv2.line(np.zeros_like(I),start_point,end_point,thickness=width, color=(1))
+#         mask += I_
+#         labels += np.where(I_==1.0, theta*(180/np.pi), 0.0)
+#         I += I_
+#     mask = np.where(mask==1.0, mask, 0.0)
+#     labels = labels*mask
+#     I = np.where(I > 1.2, 1.0, I)
+#     blur = [blur/dI[0],blur/dI[1]]
+#     I = gaussian_filter(I,sigma=blur)
+#     extent = (xI[1][0]-dI[1]/2, xI[1][-1]+dI[1]/2, xI[0][-1]+dI[0]/2, xI[0][0]-dI[0]/2)
+#     return I, mask, labels, extent
+
+# def synthetic_circle(radius, nI, dI, width=1, noise=0.05, blur=1.0): #, mask_thresh=0.5):
+#     # create an isotropic image first and downsample later
+#     # get largest dimension
+#     maxdim = np.argmax(nI)
+#     nIiso  = [nI[maxdim]]*len(nI)
+#     xI = [np.arange(n) - (n-1)//2 for n in nIiso]
+#     XI = np.stack(np.meshgrid(*xI,indexing='ij'),axis=-1)
+#     theta = np.arctan(XI[:,::-1,1]/(XI[:,::-1,0]+np.finfo(float).eps))
+#     I = np.random.randn(*nIiso)*noise
+#     I_ = np.zeros_like(I)
+#     for i in range(len(radius)):
+#         I_ = cv2.circle(I_,(nI[maxdim]//2, nI[maxdim]//2),radius=radius[i], thickness=width, color=(1))
+#     mask = np.where(I_ > 0.0, 1.0, 0.0)
+#     labels = theta*mask*(180/np.pi)
+#     I = I_+I
+
+#     # blur = [blur/dI[0],blur/dI[1]]
+#     I = gaussian_filter(I,sigma=blur)
+
+#     # downsample
+#     I = cv2.resize(I, nI[::-1], interpolation=cv2.INTER_AREA)
+#     mask = cv2.resize(mask,nI[::-1],interpolation=cv2.INTER_NEAREST)
+#     labels = cv2.resize(labels,nI[::-1],interpolation=cv2.INTER_NEAREST)
+#     xI = [(np.arange(n) - (n-1)//2)*d for n,d in zip(nI,dI)]
+#     extent = (xI[1][0]-dI[1]/2, xI[1][-1]+dI[1]/2, xI[0][-1]+dI[0]/2, xI[0][0]-dI[0]/2)
+
+#     return I, mask, labels, extent
+
+# def synthetic3d():
+#     pass
+
+
+# def anisotropy_correction(image, mask, labels, dI, direction='down', interpolation=cv2.INTER_LINEAR):
+
+#     # downsample all dimensions to largest dimension or upsample to the smallest dimension.
+#     if direction == 'down':
+#         dim = np.argmax(dI)
+#     elif direction == 'up':
+#         dim = np.argmin(dI)
+#     dsize = [image.shape[dim]]*len(image.shape)
+#     image_corrected = cv2.resize(image, dsize=dsize, interpolation=interpolation)
+#     mask_corrected = cv2.resize(mask, dsize=dsize, interpolation=cv2.INTER_NEAREST)
+#     mask_corrected = np.where(mask_corrected > 0.0, 1.0, 0.0)
+#     labels_corrected = cv2.resize(labels, dsize=dsize, interpolation=cv2.INTER_NEAREST)
+#     dI = [dI[dim]]*len(image.shape)
+#     xI = [(np.arange(n) - (n-1)/2)*d for n,d in zip(image_corrected.shape,dI)]
+#     extent = (xI[1][0]-dI[1]/2, xI[1][-1]+dI[1]/2, xI[0][-1]+dI[0]/2, xI[0][0]-dI[0]/2) # TODO: generalize for 3D case
+
+
+#     return image_corrected, mask_corrected, labels_corrected, extent
+
+# FROM: https://www.geeksforgeeks.org/bresenhams-algorithm-for-3-d-line-drawing/
+ 
+# def Bresenham3D(x1, y1, z1, x2, y2, z2):
+#     ListOfPoints = []
+#     ListOfPoints.append((x1, y1, z1))
+#     dx = abs(x2 - x1)
+#     dy = abs(y2 - y1)
+#     dz = abs(z2 - z1)
+#     if (x2 > x1):
+#         xs = 1
+#     else:
+#         xs = -1
+#     if (y2 > y1):
+#         ys = 1
+#     else:
+#         ys = -1
+#     if (z2 > z1):
+#         zs = 1
+#     else:
+#         zs = -1
+ 
+#     # Driving axis is X-axis"
+#     if (dx >= dy and dx >= dz):       
+#         p1 = 2 * dy - dx
+#         p2 = 2 * dz - dx
+#         while (x1 != x2):
+#             x1 += xs
+#             if (p1 >= 0):
+#                 y1 += ys
+#                 p1 -= 2 * dx
+#             if (p2 >= 0):
+#                 z1 += zs
+#                 p2 -= 2 * dx
+#             p1 += 2 * dy
+#             p2 += 2 * dz
+#             ListOfPoints.append((x1, y1, z1))
+ 
+#     # Driving axis is Y-axis"
+#     elif (dy >= dx and dy >= dz):      
+#         p1 = 2 * dx - dy
+#         p2 = 2 * dz - dy
+#         while (y1 != y2):
+#             y1 += ys
+#             if (p1 >= 0):
+#                 x1 += xs
+#                 p1 -= 2 * dy
+#             if (p2 >= 0):
+#                 z1 += zs
+#                 p2 -= 2 * dy
+#             p1 += 2 * dx
+#             p2 += 2 * dz
+#             ListOfPoints.append((x1, y1, z1))
+ 
+#     # Driving axis is Z-axis"
+#     else:       
+#         p1 = 2 * dy - dz
+#         p2 = 2 * dx - dz
+#         while (z1 != z2):
+#             z1 += zs
+#             if (p1 >= 0):
+#                 y1 += ys
+#                 p1 -= 2 * dz
+#             if (p2 >= 0):
+#                 x1 += xs
+#                 p2 -= 2 * dz
+#             p1 += 2 * dy
+#             p2 += 2 * dx
+#             ListOfPoints.append((x1, y1, z1))
+#     return ListOfPoints
+ 
+ 
+# def main():
+#     (x1, y1, z1) = (-1, 1, 1)
+#     (x2, y2, z2) = (5, 3, -1)
+#     ListOfPoints = Bresenham3D(x1, y1, z1, x2, y2, z2)
+#     print(ListOfPoints)
+ 
+# main()
