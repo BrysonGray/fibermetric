@@ -18,6 +18,7 @@ import scipy
 import cv2
 import pandas as pd
 from tqdm.contrib import itertools as tqdm_itertools
+from mayavi import mlab
 
 def draw_line(image, start_point, end_point, w=1, dI=(1.0,1.0)):
     """Xiaolin Wu's line drawing algorithm.
@@ -84,6 +85,79 @@ def draw_line(image, start_point, end_point, w=1, dI=(1.0,1.0)):
             image[int(y_intercept) + int(w)+1, x] = y_intercept%1
             y_intercept += gradient
             x += 1
+    return image
+
+def draw_line_3D(image, start_point, end_point): #, width=1, dI=(1.0,1.0)):
+    x1, y1, z1 = start_point
+    x2, y2, z2 = end_point
+    ListOfPoints = []
+    ListOfPoints.append((z1, y1, x1))
+    dz = abs(z2 - z1)
+    dy = abs(y2 - y1)
+    dx = abs(x2 - x1)
+    if (z2 > z1):
+        zs = 1
+    else:
+        zs = -1
+    if (y2 > y1):
+        ys = 1
+    else:
+        ys = -1
+    if (x2 > x1):
+        xs = 1
+    else:
+        xs = -1
+ 
+    # Driving axis is Z-axis"
+    if (dz >= dy and dz >= dx):       
+        p1 = 2 * dy - dz
+        p2 = 2 * dx - dz
+        while (z1 != z2):
+            z1 += zs
+            if (p1 >= 0):
+                y1 += ys
+                p1 -= 2 * dz
+            if (p2 >= 0):
+                x1 += xs
+                p2 -= 2 * dz
+            p1 += 2 * dy
+            p2 += 2 * dx
+            ListOfPoints.append((z1, y1, x1))
+ 
+    # Driving axis is Y-axis"
+    elif (dy >= dz and dy >= dx):      
+        p1 = 2 * dz - dy
+        p2 = 2 * dx - dy
+        while (y1 != y2):
+            y1 += ys
+            if (p1 >= 0):
+                z1 += zs
+                p1 -= 2 * dy
+            if (p2 >= 0):
+                x1 += xs
+                p2 -= 2 * dy
+            p1 += 2 * dz
+            p2 += 2 * dx
+            ListOfPoints.append((z1, y1, x1))
+ 
+    # Driving axis is X-axis"
+    else:       
+        p1 = 2 * dy - dx
+        p2 = 2 * dz - dx
+        while (x1 != x2):
+            x1 += xs
+            if (p1 >= 0):
+                y1 += ys
+                p1 -= 2 * dx
+            if (p2 >= 0):
+                z1 += zs
+                p2 -= 2 * dx
+            p1 += 2 * dy
+            p2 += 2 * dz
+            ListOfPoints.append((z1, y1, x1))
+
+    image[ListOfPoints] = 1.0
+
     return image
 
 
@@ -244,11 +318,8 @@ def parallel_lines_2d(thetas, nI, period=6, width=2, noise=0.1):
             
     return I, labels, extent
 
-def parallel_lines_3d(thetas, nI, dI, width=2, noise=0.1, period=6):
-    pass
 
-
-def circle(nI, period=6, width=1, noise=0.05, blur=0.0, min_radius=4): #, mask_thresh=0.5):
+def circle(nI, period=6, width=1, noise=0.05, blur=0.0, min_radius=4, ): #, mask_thresh=0.5):
     # create an isotropic image first and downsample later
     # get largest dimension
     dI = [nI[1]/nI[0], 1.0]
