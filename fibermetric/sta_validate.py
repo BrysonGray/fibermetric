@@ -18,7 +18,6 @@ import scipy
 import cv2
 import pandas as pd
 from tqdm.contrib import itertools as tqdm_itertools
-from mayavi import mlab
 
 def draw_line(image, start_point, end_point, w=1, dI=(1.0,1.0)):
     """Xiaolin Wu's line drawing algorithm.
@@ -87,11 +86,13 @@ def draw_line(image, start_point, end_point, w=1, dI=(1.0,1.0)):
             x += 1
     return image
 
+
 def draw_line_3D(image, start_point, end_point): #, width=1, dI=(1.0,1.0)):
-    x1, y1, z1 = start_point
-    x2, y2, z2 = end_point
-    ListOfPoints = []
-    ListOfPoints.append((z1, y1, x1))
+    z1, y1, x1 = start_point
+    z2, y2, x2 = end_point
+    # ListOfPoints = []
+    # ListOfPoints.append((z1, y1, x1))
+    image[z1,y1,x1] = 1.0
     dz = abs(z2 - z1)
     dy = abs(y2 - y1)
     dx = abs(x2 - x1)
@@ -122,7 +123,8 @@ def draw_line_3D(image, start_point, end_point): #, width=1, dI=(1.0,1.0)):
                 p2 -= 2 * dz
             p1 += 2 * dy
             p2 += 2 * dx
-            ListOfPoints.append((z1, y1, x1))
+            # ListOfPoints.append((z1, y1, x1))
+            image[z1,y1,x1] = 1.0
  
     # Driving axis is Y-axis"
     elif (dy >= dz and dy >= dx):      
@@ -138,7 +140,8 @@ def draw_line_3D(image, start_point, end_point): #, width=1, dI=(1.0,1.0)):
                 p2 -= 2 * dy
             p1 += 2 * dz
             p2 += 2 * dx
-            ListOfPoints.append((z1, y1, x1))
+            # ListOfPoints.append((z1, y1, x1))
+            image[z1,y1,x1] = 1.0
  
     # Driving axis is X-axis"
     else:       
@@ -154,51 +157,13 @@ def draw_line_3D(image, start_point, end_point): #, width=1, dI=(1.0,1.0)):
                 p2 -= 2 * dx
             p1 += 2 * dy
             p2 += 2 * dz
-            ListOfPoints.append((z1, y1, x1))
-
-    image[ListOfPoints] = 1.0
+            # ListOfPoints.append((z1, y1, x1))
+            image[z1,y1,x1] = 1.0
+    # split the list of points into separate arrays per axis for indexing the image
+    # z, y, x = np.array_split(np.array(ListOfPoints), 3, axis=1)
+    # image[z,y,x] = 1.0
 
     return image
-
-
-def radial_lines_2d(thetas: tuple, nI: tuple[int], dI: tuple[float], width: int= 2, noise: float=0.1, blur=1.0, mask_thresh: float=0.1):
-
-    xI = [(np.arange(n) - (n-1)/2)*d for n,d in zip(nI,dI)]
-    xmax = xI[1][-1]
-    ymax = xI[0][-1]
-    np.random.seed(1)
-    I = np.random.randn(*nI)*noise
-    mask = np.zeros_like(I)
-    labels = np.zeros_like(I)
-    worldtogrid = lambda p,dI,nI : tuple(np.round(x/d + (n-1)/2).astype(int) for x,d,n in zip(p,dI,nI))
-    for i in range(len(thetas)):
-        theta = thetas[i]
-        m = np.tan(theta)
-        y0 = m*xmax
-        y1 = -y0
-        x0 = ymax/(m+np.finfo(float).eps)
-        x1 = -x0
-        if np.abs(x0) > xmax:
-            x0 = xmax
-            x1 = -xmax
-        elif np.abs(y0) > ymax:
-            y0 = ymax
-            y1 = -ymax
-        j0,i0 = worldtogrid((y0,x0),dI,nI)
-        j1,i1 = worldtogrid((y1,x1),dI,nI)
-        start_point = (i0,j0)
-        end_point = (i1,j1)
-        I_ = cv2.line(np.zeros_like(I),start_point,end_point,thickness=width, color=(1))
-        mask += I_
-        labels += np.where(I_==1.0, theta*(180/np.pi), 0.0)
-        I += I_
-    mask = np.where(mask==1.0, mask, 0.0)
-    labels = labels*mask
-    I = np.where(I > 1.2, 1.0, I)
-    blur = [blur/dI[0],blur/dI[1]]
-    I = gaussian_filter(I,sigma=blur)
-    extent = (xI[1][0]-dI[1]/2, xI[1][-1]+dI[1]/2, xI[0][-1]+dI[0]/2, xI[0][0]-dI[0]/2)
-    return I, mask, labels, extent
 
 
 def get_endpoints(img_borders, theta, p0):
@@ -241,6 +206,87 @@ def get_endpoints(img_borders, theta, p0):
         startpoint = (y_at_xmin, -xmax) if np.abs(y_at_xmin) < ymax else (ymax, x_at_ymax)
 
     return startpoint, endpoint, out_of_bounds
+
+def get_endpoints_3D(shape, theta, phi):
+    # The first start point is (0,0,0)
+    Z,Y,X = shape
+    start_point = (0,0,0)
+    # start points scan over two dimensions with the third dimension always zero.
+    # identify the third dimension. It is the dimension with the fastest changing component along the line.
+    # if polar_angle is less than 45 degrees (pi/4), then this is the z dimension
+    # else if the azimuthal angle is greater than 45 degrees it is y. Otherwise it is x
+    if theta <= np.pi/4:
+        constant_dim = 0 # increment x and y
+        if np.abs(phi) <= np.pi/4:
+            dy = X*np.tan(phi)
+            dx = X
+        else: # abs(phi) > pi/4
+            dy = Y
+            dx = Y/np.tan(phi)
+        dz = Z
+        padx = dx
+        pady = dy
+    else: # theta > pi/4
+        if np.abs(phi) <= np.pi/4:
+            dy = X*np.tan(phi)
+            dx = X
+            pady = dy
+            padz = np.sqrt(dx**2+dy**2) / np.tan(theta)
+            # increment y and z
+        else: # abs(phi) > pi/4
+            dy = Y
+            dx = Y/np.tan(phi)
+            padx = dx
+            padz = np.sqrt(dx**2+dy**2) / np.tan(theta)
+            # increment x and z 
+        
+    # Compute 'r', the minimum line length so that every line will pass through the whole volume. draw all lines with the same length 'r'.
+    # the longest line will start 
+    # Find the maximum z,y,x from the end points.
+    # initialize a large image with these dimensions  to be cropped later.
+    # draw lines in the large image
+    # crop the large image to the final shape.
+
+    return
+
+def radial_lines_2d(thetas: tuple, nI: tuple[int], dI: tuple[float], width: int= 2, noise: float=0.1, blur=1.0, mask_thresh: float=0.1):
+
+    xI = [(np.arange(n) - (n-1)/2)*d for n,d in zip(nI,dI)]
+    xmax = xI[1][-1]
+    ymax = xI[0][-1]
+    np.random.seed(1)
+    I = np.random.randn(*nI)*noise
+    mask = np.zeros_like(I)
+    labels = np.zeros_like(I)
+    worldtogrid = lambda p,dI,nI : tuple(np.round(x/d + (n-1)/2).astype(int) for x,d,n in zip(p,dI,nI))
+    for i in range(len(thetas)):
+        theta = thetas[i]
+        m = np.tan(theta)
+        y0 = m*xmax
+        y1 = -y0
+        x0 = ymax/(m+np.finfo(float).eps)
+        x1 = -x0
+        if np.abs(x0) > xmax:
+            x0 = xmax
+            x1 = -xmax
+        elif np.abs(y0) > ymax:
+            y0 = ymax
+            y1 = -ymax
+        j0,i0 = worldtogrid((y0,x0),dI,nI)
+        j1,i1 = worldtogrid((y1,x1),dI,nI)
+        start_point = (i0,j0)
+        end_point = (i1,j1)
+        I_ = cv2.line(np.zeros_like(I),start_point,end_point,thickness=width, color=(1))
+        mask += I_
+        labels += np.where(I_==1.0, theta*(180/np.pi), 0.0)
+        I += I_
+    mask = np.where(mask==1.0, mask, 0.0)
+    labels = labels*mask
+    I = np.where(I > 1.2, 1.0, I)
+    blur = [blur/dI[0],blur/dI[1]]
+    I = gaussian_filter(I,sigma=blur)
+    extent = (xI[1][0]-dI[1]/2, xI[1][-1]+dI[1]/2, xI[0][-1]+dI[0]/2, xI[0][0]-dI[0]/2)
+    return I, mask, labels, extent
 
 
 def parallel_lines_2d(thetas, nI, period=6, width=2, noise=0.1):
