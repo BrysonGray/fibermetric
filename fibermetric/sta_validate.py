@@ -484,16 +484,21 @@ def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.
         elif err_type == 'piecewise':
             if tile_size is None:
                 tile_size = nI[1] // 10 # default to ~100 tiles in the image
-            odf, sample_points = histology.odf2d(angles, nbins=100, tile_size=tile_size)
-            # compare odf to the ground truth distribution using jenson-shannon divergence.
-            # the ground truth is a distribution of delta functions at the angles of the lines.
-            thetas_symmetric = np.concatenate((grid_thetas, np.array(grid_thetas) + np.pi))
-            thetas_symmetric = np.where(thetas_symmetric > np.pi, thetas_symmetric - 2*np.pi, thetas_symmetric)
-            ground_truth = np.zeros(odf.shape[-1])
-            ground_truth[np.digitize(thetas_symmetric, sample_points)] = 1.0 / len(thetas_symmetric)
-            # ground_truth = gaussian_filter(ground_truth, sigma=1)
-            js = np.apply_along_axis(lambda a: scipy.spatial.distance.jensenshannon(a, ground_truth), axis=-1, arr=odf)
-            error = np.mean(js)
+            # odf, sample_points = histology.odf2d(angles, nbins=100, tile_size=tile_size)
+            odf, mu, kappa, pi = histology.odf2d_vonmises(angles, nbins=100, tile_size=tile_size)
+            grid_thetas = np.sort(np.array(grid_thetas))
+            mu = np.sort(mu, axis=-1)
+            error = np.mean(np.abs(mu - grid_thetas[None,None]))*180/np.pi # TODO: something may be wrong here
+
+            # # compare odf to the ground truth distribution using jenson-shannon divergence.
+            # # the ground truth is a distribution of delta functions at the angles of the lines.
+            # thetas_symmetric = np.concatenate((grid_thetas, np.array(grid_thetas) + np.pi))
+            # thetas_symmetric = np.where(thetas_symmetric > np.pi, thetas_symmetric - 2*np.pi, thetas_symmetric)
+            # ground_truth = np.zeros(odf.shape[-1])
+            # ground_truth[np.digitize(thetas_symmetric, sample_points)] = 1.0 / len(thetas_symmetric)
+            # # ground_truth = gaussian_filter(ground_truth, sigma=1)
+            # js = np.apply_along_axis(lambda a: scipy.spatial.distance.jensenshannon(a, ground_truth), axis=-1, arr=odf)
+            # error = np.mean(js)
         
         if display:
             fig, ax = plt.subplots(1,3, figsize=(12,4))

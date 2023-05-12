@@ -448,45 +448,60 @@ def softmax(x):
     return e_x / e_x.sum(axis=0)
     
 
-def _vm_log_likelihood(theta, *data):
-    # assert len(theta)%3 == 0, 'theta must be a list of length 3n. For n components, theta must contain mu, kappa, and pi for each component.'
-    data = data[0]
-    mu = theta[::3]
-    kappa = theta[1::3]
-    pi = theta[2::3]
-    pi_0 = 1-np.sum(pi)
-    pi = np.concatenate((pi,[pi_0]))
-    pi = softmax(pi)
-    p = np.zeros((len(data), len(mu)))
-    for i in range(len(mu)):
-        p[:,i] = pi[i] * vonmises.pdf(data*2, kappa[i], loc=mu[i]*2)
-    prob_total = np.sum(p, axis=1)
-    # take the log of the sum of the posterior probabilities
-    log_likelihood = np.sum(np.log(prob_total))
+# def _vm_log_likelihood(theta, *data):
+#     # assert len(theta)%3 == 0, 'theta must be a list of length 3n. For n components, theta must contain mu, kappa, and pi for each component.'
+#     data = data[0]
+#     mu = theta[::3]
+#     kappa = theta[1::3]
+#     pi = theta[2::3]
+#     pi_0 = 1-np.sum(pi)
+#     pi = np.concatenate((pi,[pi_0]))
+#     pi = softmax(pi)
+#     p = np.zeros((len(data), len(mu)))
+#     for i in range(len(mu)):
+#         p[:,i] = pi[i] * vonmises.pdf(data*2, kappa[i], loc=mu[i]*2)
+#     prob_total = np.sum(p, axis=1)
+#     # take the log of the sum of the posterior probabilities
+#     log_likelihood = np.sum(np.log(prob_total))
 
-    return -log_likelihood
+#     return -log_likelihood
+
+def _vm_log_likelihood(p,theta):
+    # p are
+    # p[0] score for cluster 1
+    # p[1] vonmises 1 mean
+    # p[2] vonmises 1 std
+    # p[3] vonmises 2 mean
+    # p[4] vonmises 2 std
+    
+    prob0 = 1.0/(1.0 + np.exp(p[0]))
+    prob1 = 1.0 - prob0
+    
+    prob = prob0*vonmises.pdf(theta-p[1],kappa=p[2]) + prob1*vonmises.pdf(theta-p[3],kappa=p[4])
+    
+    return -np.sum(np.log(prob))
     
 
-def vm_maximum_likelihood(sample_angles, n_components=2, verbose=False):
+def vm_maximum_likelihood(sample_angles, verbose=False): # currently assumes two components
     """
     Calculate the maximum likelihood estimate of the von mises mixture model.
     """
+    n_components=2
     # initialize parameters using k-means
     kmeans = KMeans(n_clusters=n_components, random_state=0).fit(sample_angles.reshape(-1,1))
     mu = kmeans.cluster_centers_.reshape(-1)
     if verbose:
         print('inital means: ', mu)
     kappa = np.ones(n_components)
-    pi = [1/n_components] * (n_components-1)
-    theta = np.concatenate((mu,kappa,pi))
+    pi = 0.0 # initial score for component 1
+    theta = [pi, mu[0], kappa[0], mu[1], kappa[1]]
     # run the optimization
-    result = minimize(_vm_log_likelihood, theta, args=(sample_angles), method='L-BFGS-B', options={'disp': verbose})
-    mu = result.x[::3]
-    kappa = result.x[1::3]
-    pi = result.x[2::3]
-    pi_0 = 1-np.sum(pi)
-    pi = np.concatenate((pi,[pi_0]))
-    pi = softmax(pi)
+    result = minimize(_vm_log_likelihood, theta, args=sample_angles, method='Nelder-Mead', options={'disp': verbose})
+    mu = result.x[1::2]
+    kappa = result.x[2::2]
+    pi_1 = result.x[0]
+    pi_2 = 1-pi
+    pi = [pi_1,pi_2]
 
     return mu, kappa, pi
 
@@ -517,19 +532,24 @@ def odf2d_vonmises(theta, nbins, tile_size, n_components=2, verbose=False):
     nbits = theta.strides[-1]
     theta = np.lib.stride_tricks.as_strided(theta, shape=(i,j,tile_size,tile_size), strides=(tile_size*theta.shape[1]*nbits,tile_size*nbits,theta.shape[1]*nbits,nbits))
     theta = theta.reshape(i,j,tile_size**2)
-    odf = np.zeros((theta.shape[0],theta.shape[1], nbins))
-
+    odf = np.zeros((theta.shape[0], theta.shape[1], nbins))
+    mu = np.zeros((theta.shape[0], theta.shape[1], n_components))
+    kappa = np.zeros((theta.shape[0], theta.shape[1], n_components))
+    pi = np.zeros((theta.shape[0], theta.shape[1], n_components))
     # for each tile, fit a mixture of von mises distributions to the histogram of angles.
     # print('fitting to von mises distributions...')
     for i in range(theta.shape[0]):
         for j in range(theta.shape[1]):
             # fit a mixture of von mises distributions to the histogram of angles
             # mu, kappa, pi = vonmises_mixture(theta[i,j,:], n_components=n_components, verbose=verbose)
-            mu, kappa, pi = vm_maximum_likelihood(theta[i,j,:][~np.isnan(theta[i,j,:])], n_components=n_components, verbose=verbose)
+            mu_, kappa_, pi_ = vm_maximum_likelihood(theta[i,j,:][~np.isnan(theta[i,j,:])], verbose=verbose)
+            mu[i,j,:] = mu_
+            kappa[i,j,:] = kappa_
+            pi[i,j,:] = pi_
             # create an odf from the fitted parameters
             for k in range(n_components):
                 # odf[i,j,:] += pi[k] * vonmises_density(np.linspace(-np.pi, np.pi, nbins), mu[k]*2, kappa[k]) # multiply mu by 2 to convert from [-pi/2,pi/2] to [-pi,pi]
-                odf[i,j,:] += vonmises.pdf(np.linspace(-np.pi, np.pi, nbins), kappa[k], loc=mu[k]*2)
+                odf[i,j,:] += vonmises.pdf(np.linspace(-np.pi, np.pi, nbins), kappa[i,j,k], loc=mu[i,j,k]*2)
             odf[i,j,:] = odf[i,j,:] / np.sum(odf[i,j,:]) # normalize to make this a pdf
             # print('done')
         
