@@ -170,18 +170,18 @@ def angles(S):
     angles : ndarray
         Array of values between -pi/2 and pi/2.
     """
-    
     w,v = np.linalg.eigh(S)
     v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue with all being > 0
     if w.shape[-1] == 2:
-        theta = (np.arctan(v[...,1] / (v[...,0] + np.finfo(float).eps))) # row/col gives the counterclockwise angle from left/right direction.
+        theta = (np.arctan2(v[...,1], v[...,0])) # row/col gives the counterclockwise angle from left/right direction.
+        # theta = np.arctan(v[...,1] / (v[...,0] + np.finfo(float).eps))
         return (theta,)
     else:
         x = v[...,0]
         y = v[...,1]
         z = v[...,2]
-        theta = np.arctan(-z / (np.sqrt(x**2 + y**2) + np.finfo(float).eps)) + np.pi / 2  # range is (0,pi)
-        phi = np.arctan(y / (x + np.finfo(float).eps)) # range (-pi/2, pi/2)
+        theta = np.arctan2(-z, np.sqrt(x**2 + y**2)) + np.pi / 2  # range is (0,pi)
+        phi = np.arctan(y, x) # range (-pi/2, pi/2)
         return (theta,phi)
 
 

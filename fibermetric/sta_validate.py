@@ -480,7 +480,7 @@ def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.
             # get angles where not none
             angles_ = angles[~np.isnan(angles)]
             labels_ = labels[~np.isnan(angles)]
-            error = (np.sum((angles_ - labels_)) / nangles) # average error in radians
+            error = (np.sum(np.abs(angles_ - labels_)) / nangles) * 180 / np.pi # average error in radians
         elif err_type == 'piecewise':
             if tile_size is None:
                 tile_size = nI[1] // 10 # default to ~100 tiles in the image
