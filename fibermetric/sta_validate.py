@@ -207,47 +207,6 @@ def get_endpoints(img_borders, theta, p0):
 
     return startpoint, endpoint, out_of_bounds
 
-def get_endpoints_3D(shape, theta, phi):
-    # The first start point is (0,0,0)
-    Z,Y,X = shape
-    start_point = (0,0,0)
-    # start points scan over two dimensions with the third dimension always zero.
-    # identify the third dimension. It is the dimension with the fastest changing component along the line.
-    # if polar_angle is less than 45 degrees (pi/4), then this is the z dimension
-    # else if the azimuthal angle is greater than 45 degrees it is y. Otherwise it is x
-    if theta <= np.pi/4:
-        constant_dim = 0 # increment x and y
-        if np.abs(phi) <= np.pi/4:
-            dy = X*np.tan(phi)
-            dx = X
-        else: # abs(phi) > pi/4
-            dy = Y
-            dx = Y/np.tan(phi)
-        dz = Z
-        padx = dx
-        pady = dy
-    else: # theta > pi/4
-        if np.abs(phi) <= np.pi/4:
-            dy = X*np.tan(phi)
-            dx = X
-            pady = dy
-            padz = np.sqrt(dx**2+dy**2) / np.tan(theta)
-            # increment y and z
-        else: # abs(phi) > pi/4
-            dy = Y
-            dx = Y/np.tan(phi)
-            padx = dx
-            padz = np.sqrt(dx**2+dy**2) / np.tan(theta)
-            # increment x and z 
-        
-    # Compute 'r', the minimum line length so that every line will pass through the whole volume. draw all lines with the same length 'r'.
-    # the longest line will start 
-    # Find the maximum z,y,x from the end points.
-    # initialize a large image with these dimensions  to be cropped later.
-    # draw lines in the large image
-    # crop the large image to the final shape.
-
-    return
 
 def radial_lines_2d(thetas: tuple, nI: tuple[int], dI: tuple[float], width: int= 2, noise: float=0.1, blur=1.0, mask_thresh: float=0.1):
 
@@ -365,6 +324,128 @@ def parallel_lines_2d(thetas, nI, period=6, width=2, noise=0.1):
     return I, labels, extent
 
 
+def parallel_lines_3D(shape, theta, phi, period, width=1, noise=0.0):
+    Z,Y,X = shape
+    # any anisotropy is only in the z dimension
+    Zhat = Y # The length of Z in units is the same as X and Y. Use Zhat to remember that this is still the Z axis
+    zsign = 1 if theta <= np.pi/2 else -1
+    ysign = 1 if phi >= 0 else -1
+    xsign = 1 if -np.pi/2 <= phi <= np.pi/2 else -1
+    # start points scan over two dimensions with the third dimension constant.
+    # identify the third dimension. It is the dimension with the fastest changing component along the line.
+    # if polar_angle is less than 45 degrees (pi/4), then this is the z dimension
+    # else if the azimuthal angle is greater than 45 degrees it is y. Otherwise it is x
+    if theta <= np.pi/4 or theta >= 3*np.pi/4:
+        # increment x and y
+        h = Zhat / np.tan(np.abs(np.pi/2 - theta))
+        dz = zsign * Zhat
+        dy = h * np.sin(phi)
+        dx = h * np.cos(phi)
+        zstart = 0 if zsign == 1 else Zhat
+        # padz = 0
+        ystart = 0 if ysign == 1 else Y + 2*np.ceil(np.abs(dy))
+        # pady = int(np.ceil(np.abs(dy)))
+        xstart = 0 if xsign == 1 else X + 2*np.ceil(np.abs(dx))
+        # padx = int(np.ceil(np.abs(dx)))
+        z0 = np.array([zstart])
+        y0 = np.arange(ystart, ystart + dy + ysign*Y + period, period)
+        x0 = np.arange(xstart, xstart + dx + xsign*X + period, period)
+
+    else: # pi/4 < theta < 3pi/4
+        if np.abs(phi) <= np.pi/4 or np.abs(phi) >= 3*np.pi/4:
+            # increment y and z
+            dz = X * np.tan(np.pi/2 - theta)
+            dx = xsign * X
+            dy = dx * np.tan(phi)
+            zstart = 0 if zsign == 1 else Zhat + np.ceil(2*np.abs(dz))
+            # padz = int(np.ceil(np.abs(dz)))
+            ystart = 0 if zsign == 1 else Y + np.ceil(2*np.abs(dy))
+            # pady = int(np.ceil(np.abs(dy)))
+            xstart = 0 if xsign == 1 else X
+            # padx = 0
+            z0 = np.arange(zstart, zstart + dz + zsign*Zhat + period, period)
+            y0 = np.arange(ystart, ystart + dy + ysign*Y + period, period)
+            x0 = np.array([xstart])
+
+        else: # pi/4 < abs(phi) < 3pi/4
+            # increment x and z
+            dz = Y * np.tan(np.pi/2 - theta)
+            dy = ysign*Y
+            dx = dy/np.tan(phi)
+            zstart = 0 if zsign == 1 else Zhat + 2*np.ceil(np.abs(dz))
+            # padz = int(np.ceil(np.abs(dz)))
+            ystart = 0 if ysign == 1 else Y
+            # pady = int(np.ceil(np.abs(dy)))
+            xstart = 0 if xsign == 1 else X + 2*np.ceil(np.abs(dx))
+            # padx = int(np.ceil(np.abs(dx)))
+            z0 = np.arange(zstart, zstart + dz + zsign*Zhat + period, period)
+            y0 = np.array([ystart])
+            x0 = np.arange(xstart, xstart + dx + xsign*X + period, period)
+    z1 = z0 + dz
+    y1 = y0 + dy
+    x1 = x0 + dx
+    start_points = np.round(np.stack(np.meshgrid(z0 * Z/Zhat, y0, x0, indexing='ij'), axis=-1)).astype('int')
+    end_points = np.round(np.stack(np.meshgrid(z1 * Z/Zhat, y1, x1, indexing='ij'), axis=-1)).astype('int')
+    # initialize a large image with these dimensions to be cropped later.
+    large_img_shape = np.max(np.concatenate((start_points,end_points)).reshape(-1,3),axis=0) + 1
+    large_img = np.zeros(large_img_shape)
+    pad = (large_img_shape - shape)//2
+    r = (large_img_shape - shape)%2
+    # draw lines in the large image
+    for start,end in zip(start_points.reshape(-1,3), end_points.reshape(-1,3)):
+        large_img = draw_line_3D(large_img, start, end)
+    # crop the large image to the final shape.
+
+    img = large_img[pad[0]:large_img_shape[0]-(pad[0]+r[0]), pad[1]:large_img_shape[1]-(pad[1]+r[1]), pad[2]:large_img_shape[2]-(pad[2]+r[2])]
+    # binary dilation to add thickness to lines
+    # first in the xy plane
+
+    k = 0
+    for i in range(width):
+        if ((i+1) * Z/Y)//1 - k == 1:
+            img = scipy.ndimage.binary_dilation(img, structure=np.ones((3,3,3)))
+            k += 1
+        else:
+            img = scipy.ndimage.binary_dilation(img, structure=np.ones((1,3,3)))
+    img = img.astype('float')
+    # blur the image for anti-aliasing
+    img = gaussian_filter(img, sigma=(Z/Y,1,1))
+
+    return img
+
+
+def downsample_image(image, downsample_factor):
+    """
+    Downsample a given image array by taking the local average of each block of pixels 
+    with size downsample_factor x downsample_factor.
+    
+    Args:
+        image (ndarray): a 2D numpy array representing the image.
+        downsample_factor (int): the size of the block of pixels for local averaging.
+        
+    Returns:
+        The downsampled image array.
+    """
+    m, n = image.shape
+    if isinstance(downsample_factor, (tuple, list, np.ndarray)):
+        down_m = int(downsample_factor[0])
+        down_n = int(downsample_factor[1])
+    else:
+        down_m = down_n = downsample_factor
+    # Compute the number of blocks of pixels along each axis.
+    block_m = m//down_m
+    block_n = n//down_n
+    
+    # Reshape the image array into a 4D array of shape (block_m, downsample_factor, block_n, downsample_factor), 
+    # with each element representing a block of pixels.
+    blocks = image[:block_m*down_m, :block_n*down_n].reshape(block_m, down_m, block_n, down_n)
+    
+    # Take the mean of each block of pixels along the width and height dimensions.
+    downsampled_blocks = blocks.mean((1, 3))
+    
+    # Reshape the downsampled blocks into a 2D numpy array and return.
+    return downsampled_blocks.reshape(block_m, block_n)
+
 def circle(nI, period=6, width=1, noise=0.05, blur=0.0, min_radius=4, ): #, mask_thresh=0.5):
     # create an isotropic image first and downsample later
     # get largest dimension
@@ -373,24 +454,27 @@ def circle(nI, period=6, width=1, noise=0.05, blur=0.0, min_radius=4, ): #, mask
     nIiso  = [nI[maxdim]]*len(nI)
     xI = [np.arange(n) - (n-1)//2 for n in nIiso]
     XI = np.stack(np.meshgrid(*xI,indexing='ij'),axis=-1)
-    theta = np.arctan(XI[:,::-1,1]/(XI[:,::-1,0]+np.finfo(float).eps))
+    # theta = np.arctan(XI[:,::-1,1]/(XI[:,::-1,0]+np.finfo(float).eps))
+    theta = np.arctan2(XI[:,::-1,1], XI[:,::-1,0])
     I = np.random.randn(*nIiso)*noise
     I_ = np.zeros_like(I)
     max_radius = np.sqrt(nI[1]**2/2)
     radii = np.arange(min_radius, max_radius, period, dtype=int)
     for i in range(len(radii)):
         I_ = cv2.circle(I_,(nI[maxdim]//2, nI[maxdim]//2),radius=radii[i], thickness=width, color=(1))
-    mask = np.where(I_ > 0.0, 1.0, 0.0)
-    labels = theta*mask*(180/np.pi)
+    # mask = np.where(I_ > 0.0, 1.0, 0.0)
+    labels = theta #*mask #*(180/np.pi)
     I = I_+I
 
     # blur = [blur/dI[0],blur/dI[1]]
     I = gaussian_filter(I,sigma=blur)
 
     # downsample
-    I = cv2.resize(I, nI[::-1], interpolation=cv2.INTER_AREA)
-    mask = cv2.resize(mask,nI[::-1],interpolation=cv2.INTER_NEAREST)
-    labels = cv2.resize(labels,nI[::-1],interpolation=cv2.INTER_NEAREST)
+    # I = cv2.resize(I, nI[::-1], interpolation=cv2.INTER_AREA)
+    I = downsample_image(I, (nI[1]/nI[0], 1))
+    # mask = cv2.resize(mask,nI[::-1],interpolation=cv2.INTER_NEAREST)
+    # labels = cv2.resize(labels,nI[::-1],interpolation=cv2.INTER_NEAREST)
+    labels = downsample_image(labels, (nI[1]/nI[0], 1))
     xI = [(np.arange(n) - (n-1)//2)*d for n,d in zip(nI,dI)]
     extent = (xI[1][0]-dI[1]/2, xI[1][-1]+dI[1]/2, xI[0][-1]+dI[0]/2, xI[0][0]-dI[0]/2)
 
@@ -401,7 +485,7 @@ def ring():
     pass
 
 
-def anisotropy_correction(image, labels, dI, direction='up', interpolation=cv2.INTER_LINEAR):
+def anisotropy_correction(image, labels, dI, direction='up', interpolation=cv2.INTER_AREA):
 
     # downsample all dimensions to largest dimension or upsample to the smallest dimension.
     if direction == 'down':
@@ -478,9 +562,15 @@ def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.
             nangles = np.sum(~np.isnan(angles))
             # compute the average difference between computed angles and labels
             # get angles where not none
-            angles_ = angles[~np.isnan(angles)]
-            labels_ = labels[~np.isnan(angles)]
-            error = (np.sum(np.abs(angles_ - labels_)) / nangles) * 180 / np.pi # average error in radians
+            # angles_ = angles[~np.isnan(angles)]
+            # labels_ = labels[~np.isnan(angles)]
+            angles_ = angles
+            labels_ = labels
+            angles_flipped = np.where(angles_ < 0, angles_ + np.pi, angles_ - np.pi)
+            angles_ = np.stack((angles_, angles_flipped), axis=-1)
+            diff = np.abs(angles_ - labels_[...,None])
+            diff = np.nanmin(diff, axis=-1)
+            error = np.nanmean(diff) * 180 / np.pi # average error in radians
         elif err_type == 'piecewise':
             if tile_size is None:
                 tile_size = nI[1] // 10 # default to ~100 tiles in the image
@@ -501,13 +591,15 @@ def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.
             # error = np.mean(js)
         
         if display:
-            fig, ax = plt.subplots(1,3, figsize=(12,4))
+            fig, ax = plt.subplots(1,4, figsize=(12,4))
             ax[0].imshow(I, extent=extent)
             ax[0].set_title('Image')
             ax[1].imshow(labels, extent=extent)
             ax[1].set_title('Ground Truth')
             ax[2].imshow(angles, extent=extent)
             ax[2].set_title('Angles')
+            ax[3].imshow(diff, extent=extent)
+            ax[3].set_title('Difference')
             plt.show()
 
             # # The below method produces errors because scipy.signal.find_peaks does not always find the exact number of peaks as thetas.

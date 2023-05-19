@@ -87,8 +87,8 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1):
 
         # S = np.stack((Iyy, Ixy, Ixy, Ixx), axis=-1)
         S = np.stack((1-Ixx,-Ixy,-Ixy,1-Iyy), axis=-1) # identity minus the structure tensor
-        # null out the structure tensor where the norm is too small
-        S[norm < 0.001] = None
+        # # null out the structure tensor where the norm is too small
+        # S[norm < 1e-5] = None
         S = S.reshape((S.shape[:-1]+(2,2)))
 
     elif I.ndim == 3:
@@ -181,8 +181,9 @@ def angles(S):
         y = v[...,1]
         z = v[...,2]
         theta = np.arctan2(-z, np.sqrt(x**2 + y**2)) + np.pi / 2  # range is (0,pi)
-        phi = np.arctan(y, x) # range (-pi/2, pi/2)
+        phi = np.arctan2(y, x) # range (-pi/2, pi/2)
         return (theta,phi)
+        # return (x,y,z)
 
 
 def hsv(S, I):
