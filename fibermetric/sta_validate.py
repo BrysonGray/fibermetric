@@ -110,7 +110,7 @@ def draw_line_3D(image, start_point, end_point): #, width=1, dI=(1.0,1.0)):
         xs = -1
  
     # Driving axis is Z-axis"
-    if (dz >= dy and dz >= dx):       
+    if (dz >= dy and dz >= dx):
         p1 = 2 * dy - dz
         p2 = 2 * dx - dz
         while (z1 != z2):
@@ -127,7 +127,7 @@ def draw_line_3D(image, start_point, end_point): #, width=1, dI=(1.0,1.0)):
             image[z1,y1,x1] = 1.0
  
     # Driving axis is Y-axis"
-    elif (dy >= dz and dy >= dx):      
+    elif (dy >= dz and dy >= dx):
         p1 = 2 * dz - dy
         p2 = 2 * dx - dy
         while (y1 != y2):
@@ -397,19 +397,20 @@ def parallel_lines_3D(shape, theta, phi, period, width=1, noise=0.0):
     # crop the large image to the final shape.
 
     img = large_img[pad[0]:large_img_shape[0]-(pad[0]+r[0]), pad[1]:large_img_shape[1]-(pad[1]+r[1]), pad[2]:large_img_shape[2]-(pad[2]+r[2])]
+    print('test')
     # binary dilation to add thickness to lines
     # first in the xy plane
 
-    k = 0
-    for i in range(width):
-        if ((i+1) * Z/Y)//1 - k == 1:
-            img = scipy.ndimage.binary_dilation(img, structure=np.ones((3,3,3)))
-            k += 1
-        else:
-            img = scipy.ndimage.binary_dilation(img, structure=np.ones((1,3,3)))
-    img = img.astype('float')
+    # k = 0
+    # for i in range(width):
+    #     if ((i+1) * Z/Y)//1 - k == 1:
+    #         img = scipy.ndimage.binary_dilation(img, structure=np.ones((3,3,3)))
+    #         k += 1
+    #     else:
+    #         img = scipy.ndimage.binary_dilation(img, structure=np.ones((1,3,3)))
+    # img = img.astype('float')
     # blur the image for anti-aliasing
-    img = gaussian_filter(img, sigma=(Z/Y,1,1))
+    # img = gaussian_filter(img, sigma=(Z/Y,1,1))
 
     return img
 
@@ -554,7 +555,7 @@ def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.
         # apply anisotropy correction
         I, labels, extent = anisotropy_correction(I, labels, dI)
         # compute structure tensor and angles
-        S = histology.structure_tensor(I, derivative_sigma=derivative_sigma, tensor_sigma=tensor_sigma, dI=dI)
+        S = histology.structure_tensor(I, derivative_sigma=derivative_sigma, tensor_sigma=tensor_sigma, dI=(1.0,1.0))
         angles = histology.angles(S)[0]
         assert err_type in ('pixelwise', 'piecewise')
         if err_type == 'pixelwise':
@@ -565,10 +566,14 @@ def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.
             # angles_ = angles[~np.isnan(angles)]
             # labels_ = labels[~np.isnan(angles)]
             angles_ = angles
-            labels_ = labels
             angles_flipped = np.where(angles_ < 0, angles_ + np.pi, angles_ - np.pi)
             angles_ = np.stack((angles_, angles_flipped), axis=-1)
-            diff = np.abs(angles_ - labels_[...,None])
+            labels_ = labels
+            labels_flipped = np.where(labels_ < 0, labels_ + np.pi, labels_ - np.pi)
+            labels_ = np.stack((labels_, labels_flipped), axis=-1)
+            diff1 = np.abs(angles_ - labels_)
+            diff2 = np.abs(angles_[...,::-1] - labels_)
+            diff = np.concatenate((diff1, diff2), axis=-1)
             diff = np.nanmin(diff, axis=-1)
             error = np.nanmean(diff) * 180 / np.pi # average error in radians
         elif err_type == 'piecewise':
