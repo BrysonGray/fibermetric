@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-
+# ruff: noqa: E501
 '''
 Structure tensor analysis validation functions.
 
@@ -10,6 +10,8 @@ Author: Bryson Gray
 
 import sys
 sys.path.insert(0, '/home/brysongray/fibermetric/')
+sys.path.insert(0, '/home/brysongray/periodic-kmeans/')
+from periodic_kmeans.periodic_kmeans import periodic_kmeans, PeriodicKMeans
 from fibermetric import histology
 import numpy as np
 import matplotlib.pyplot as plt
@@ -18,6 +20,7 @@ import scipy
 import cv2
 import pandas as pd
 from tqdm.contrib import itertools as tqdm_itertools
+from sklearn.cluster import KMeans
 
 def draw_line(image, start_point, end_point, w=1, dI=(1.0,1.0)):
     """Xiaolin Wu's line drawing algorithm.
@@ -58,8 +61,7 @@ def draw_line(image, start_point, end_point, w=1, dI=(1.0,1.0)):
         gradient = dy/dx  #*dI[0]/dI[1]
 
     # Get the vertical component of the line width to find the number of pixels between the top and bottom edge of the line.
-    # w = w * np.sqrt(1 + (gradient*dI[0]/dI[1])**2) / dI[0] # Here we use the identity 1 + tan^2 = sec^2
-    w = w * np.sqrt(1 + gradient**2)/ dI[0]
+    w = w * np.sqrt(1 + gradient**2)/ dI[0] # Here we use the identity 1 + tan^2 = sec^2 and divide by dI to convert from user defined coordinates to pixels
 
     Ix0 = x0
     Ix1 = x1
@@ -188,7 +190,8 @@ def get_endpoints(img_borders, theta, p0):
     out_of_bounds: bool
 
     """
-    slope_intercept_formula = lambda x, slope, b: slope * x + b
+    def slope_intercept_formula(x, slope, b):
+        return slope * x + b
     slope = np.tan(theta)
     slope_inv = 1/(slope+np.finfo(float).eps)
     y0, x0 = p0
@@ -199,16 +202,16 @@ def get_endpoints(img_borders, theta, p0):
     x_at_ymin = slope_intercept_formula(-ymax-y0, slope_inv, x0)
     out_of_bounds = np.abs(y_at_xmax) > ymax and np.abs(y_at_xmin) > ymax and np.abs(x_at_ymax) > xmax and np.abs(x_at_ymin) > xmax
     if slope >= 0:
-        endpoint = (y_at_xmax, xmax) if np.abs(y_at_xmax) < ymax else (ymax, x_at_ymax)
-        startpoint = (y_at_xmin, -xmax) if np.abs(y_at_xmin) < ymax else (-ymax, x_at_ymin)
+        endpoint = (y_at_xmax, xmax) if np.abs(y_at_xmax) <= ymax else (ymax, x_at_ymax)
+        startpoint = (y_at_xmin, -xmax) if np.abs(y_at_xmin) <= ymax else (-ymax, x_at_ymin)
     else:
-        endpoint = (y_at_xmax, xmax) if np.abs(y_at_xmax) < ymax else (-ymax, x_at_ymin)
-        startpoint = (y_at_xmin, -xmax) if np.abs(y_at_xmin) < ymax else (ymax, x_at_ymax)
+        endpoint = (y_at_xmax, xmax) if np.abs(y_at_xmax) <= ymax else (-ymax, x_at_ymin)
+        startpoint = (y_at_xmin, -xmax) if np.abs(y_at_xmin) <= ymax else (ymax, x_at_ymax)
 
     return startpoint, endpoint, out_of_bounds
 
 
-def radial_lines_2d(thetas: tuple, nI: tuple[int], dI: tuple[float], width: int= 2, noise: float=0.1, blur=1.0, mask_thresh: float=0.1):
+def radial_lines_2d(thetas: tuple, nI: "tuple[int]", dI: "tuple[float]", width: int= 2, noise: float=0.1, blur=1.0, mask_thresh: float=0.1):
 
     xI = [(np.arange(n) - (n-1)/2)*d for n,d in zip(nI,dI)]
     xmax = xI[1][-1]
@@ -217,7 +220,8 @@ def radial_lines_2d(thetas: tuple, nI: tuple[int], dI: tuple[float], width: int=
     I = np.random.randn(*nI)*noise
     mask = np.zeros_like(I)
     labels = np.zeros_like(I)
-    worldtogrid = lambda p,dI,nI : tuple(np.round(x/d + (n-1)/2).astype(int) for x,d,n in zip(p,dI,nI))
+    def worldtogrid(p, dI, nI):
+        return tuple(np.round(x / d + (n - 1) / 2).astype(int) for x, d, n in zip(p, dI, nI))
     for i in range(len(thetas)):
         theta = thetas[i]
         m = np.tan(theta)
@@ -274,32 +278,36 @@ def parallel_lines_2d(thetas, nI, period=6, width=2, noise=0.1):
     labels = np.zeros_like(I)
     mask = np.zeros_like(I)
     # we will need to convert the coordinates with centered origin to array indices
-    worldtogrid = lambda p,dI,nI : tuple((x/d + (n-1)/2).astype(int) for x,d,n in zip(p,dI,nI))
+    def worldtogrid(p, dI, nI):
+        return tuple((x / d + (n - 1) / 2).astype(int) for x, d, n in zip(p, dI, nI))
 
     # get the borders of the image
-    pad = int(width*np.sqrt(2)/min(dI))+1#*np.max(dI)/np.min(dI))
-    nI_padded = [n+2*pad for n in nI]
-    borders_padded = np.array([((n-1)/2)*d for n,d in zip(nI_padded,dI)])
-    borders =  np.array([((n-1)/2)*d for n,d in zip(nI,dI)]) # borders are in the defined coordinate system
+    # pad the image to account for the line width and anti-aliasing. 
+    pad = int(width*np.sqrt(2)/min(dI))+1 # this is the max width of the line in pixels plus 1. Refer to draw_line for width calculation details.
+    # borders are in the defined coordinate system. Add padding because we'll crop the left side to cut off the flat end of the line.
+    borders = np.array([((n-1)/2)*d for n,d in zip([n+pad for n in nI],dI)])
     # define line endpoints for each field of parallel lines.
     for i in range(len(thetas)):
-        I_ = np.zeros(nI_padded) #  We need a padded image so line drawing does not go out of borders. It will be cropped at the end.
+        # We need a padded image so line drawing does not go out of borders. It will be cropped at the end.
+        # Add 2*pad because we will crop the left and the right side of the image.
+        I_ = np.zeros([n+2*pad for n in nI])
         theta = thetas[i]
         x_step = np.cos(theta+np.pi/2)*period
         y_step = np.sin(theta+np.pi/2)*period
         cy = 0
         cx = 0
-        start, end, _ = get_endpoints(borders_padded, theta, p0=(cy,cx))
+        start, end, _ = get_endpoints(borders, theta, p0=(cy,cx))
         lines = [(start,end)] # list of parallel lines as tuples (startpoint, endpoint)
         while 1:
             cy += y_step
             cx += x_step
-            start, end, out_of_bounds = get_endpoints(borders_padded, theta, p0=(cy,cx))
+
+            start, end, out_of_bounds = get_endpoints(borders, theta, p0=(cy,cx))
             if out_of_bounds:
                 break
             else:
                 lines += [(start,end)]
-            start, end, out_of_bounds = get_endpoints(borders_padded, theta, p0=(-cy,-cx))
+            start, end, out_of_bounds = get_endpoints(borders, theta, p0=(-cy,-cx))
             if out_of_bounds:
                 break
             else:
@@ -308,10 +316,8 @@ def parallel_lines_2d(thetas, nI, period=6, width=2, noise=0.1):
         for j in range(len(lines)):
             start = lines[j][0]
             end = lines[j][1]
-            start_point = worldtogrid(start, dI, nI)
-            end_point = worldtogrid(end, dI, nI)
-            # start_point = worldtogrid(start, dI, nI_padded)
-            # end_point = worldtogrid(end, dI, nI_padded)
+            start_point = worldtogrid(start, dI, [n+pad for n in nI])
+            end_point = worldtogrid(end, dI, [n+pad for n in nI])
             I_ = draw_line(I_, start_point, end_point, w=width, dI=dI)
         mask_ = np.where(I_[pad:-pad, pad:-pad],1,0)
         labels += theta * mask_
@@ -319,7 +325,7 @@ def parallel_lines_2d(thetas, nI, period=6, width=2, noise=0.1):
         I += I_[pad:-pad, pad:-pad]
     mask = np.where(mask==1, 1.0, 0.0)
     labels = labels * mask
-    extent = (-borders[1]-dI[1]/2, borders[1]+dI[1]/2, borders[0]+dI[0]/2, -borders[0]-dI[0]/2)
+    extent = (0,nI[1]*dI[1], nI[0]*dI[0], 0)
             
     return I, labels, extent
 
@@ -455,8 +461,8 @@ def circle(nI, period=6, width=1, noise=0.05, blur=0.0, min_radius=4, ): #, mask
     nIiso  = [nI[maxdim]]*len(nI)
     xI = [np.arange(n) - (n-1)//2 for n in nIiso]
     XI = np.stack(np.meshgrid(*xI,indexing='ij'),axis=-1)
-    # theta = np.arctan(XI[:,::-1,1]/(XI[:,::-1,0]+np.finfo(float).eps))
-    theta = np.arctan2(XI[:,::-1,1], XI[:,::-1,0])
+    theta = np.arctan(XI[:,::-1,1]/(XI[:,::-1,0]+np.finfo(float).eps))
+    # theta = np.arctan2(XI[:,::-1,1], XI[:,::-1,0])
     I = np.random.randn(*nIiso)*noise
     I_ = np.zeros_like(I)
     max_radius = np.sqrt(nI[1]**2/2)
@@ -510,7 +516,8 @@ def anisotropy_correction(image, labels, dI, direction='up', interpolation=cv2.I
     return image_corrected, labels_corrected, extent
 
 
-def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.05, phantom='grid', err_type='pixelwise', grid_thetas=None, tile_size=None, dim=2, display=False):
+def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.05,\
+                 phantom='grid', err_type='pixelwise', grid_thetas=None, tile_size=None, dim=2, display=False):
     """Test structure tensor analysis on a grid of crossing lines.
     Parameters
     ----------
@@ -523,7 +530,8 @@ def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.
     nI : tuple of int
         Number of pixels in each dimension.
     grid_thetas : tuple of float
-        Angles of the lines in radians. One angle for 2D, two angles (polar and azimuthal) for 3D.
+        Angles of the lines in radians in the range [-pi/2, pi/2]. One angle for 2D, two
+        angles (polar and azimuthal) for 3D.
     width : int
         Width of the lines.
     noise : float
@@ -536,35 +544,37 @@ def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.
         Phantom type
     err_type : ['pixelwise', 'piecewise']
         Pixelwise returns average angular difference per pixel. 
-        Piecewise divides the image into pieces and fits each group of pixels to an ODF from which peaks are computed and compared to ground truth.
+        Piecewise divides the image into pieces and fits each group of pixels
+        to an ODF from which peaks are computed and compared to ground truth.
     
     Returns
     -------
     error : float
-        Average angular difference between ground truth and estimated angles for pixelwise error, or jensen-shannon divergence for piecewise error.
+        Average angular difference between ground truth and estimated angles for
+        pixelwise error, or jensen-shannon divergence for piecewise error.
 
     """
     if dim == 2:
         dI = (nI[1]/nI[0], 1.0)
         assert phantom in ('grid', 'circles')
+        assert err_type in ('pixelwise', 'piecewise')
         if phantom == 'grid':
-            assert isinstance(grid_thetas, (list, tuple)), 'grid_thetas must be a list or tuple of angles when using a grid phantom.'
+            assert isinstance(grid_thetas, (list, tuple)), 'grid_thetas must be a list\
+                or tuple of angles when using a grid phantom.'
+            assert np.alltrue([np.abs(theta) <= np.pi/2 for theta in grid_thetas]),\
+            'thetas must be in the range [-pi/2, pi/2]'
             I, labels, extent = parallel_lines_2d(grid_thetas, nI, width=width, noise=noise, period=period)
+            masked = False
         elif phantom == 'circles':
             I, labels, extent = circle(nI, period=period, width=width, noise=noise)
+            masked = False
         # apply anisotropy correction
         I, labels, extent = anisotropy_correction(I, labels, dI)
         # compute structure tensor and angles
-        S = histology.structure_tensor(I, derivative_sigma=derivative_sigma, tensor_sigma=tensor_sigma, dI=(1.0,1.0))
+        S = histology.structure_tensor(I, derivative_sigma=derivative_sigma, tensor_sigma=tensor_sigma, dI=(1.0,1.0), masked=masked)
         angles = histology.angles(S)[0]
-        assert err_type in ('pixelwise', 'piecewise')
         if err_type == 'pixelwise':
-            # count number of angles that are not none
-            nangles = np.sum(~np.isnan(angles))
             # compute the average difference between computed angles and labels
-            # get angles where not none
-            # angles_ = angles[~np.isnan(angles)]
-            # labels_ = labels[~np.isnan(angles)]
             angles_ = angles
             angles_flipped = np.where(angles_ < 0, angles_ + np.pi, angles_ - np.pi)
             angles_ = np.stack((angles_, angles_flipped), axis=-1)
@@ -579,21 +589,34 @@ def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.
         elif err_type == 'piecewise':
             if tile_size is None:
                 tile_size = nI[1] // 10 # default to ~100 tiles in the image
-            # odf, sample_points = histology.odf2d(angles, nbins=100, tile_size=tile_size)
-            odf, mu, kappa, pi = histology.odf2d_vonmises(angles, nbins=100, tile_size=tile_size)
-            grid_thetas = np.sort(np.array(grid_thetas))
-            mu = np.sort(mu, axis=-1)
-            error = np.mean(np.abs(mu - grid_thetas[None,None]))*180/np.pi # TODO: something may be wrong here
-
-            # # compare odf to the ground truth distribution using jenson-shannon divergence.
-            # # the ground truth is a distribution of delta functions at the angles of the lines.
-            # thetas_symmetric = np.concatenate((grid_thetas, np.array(grid_thetas) + np.pi))
-            # thetas_symmetric = np.where(thetas_symmetric > np.pi, thetas_symmetric - 2*np.pi, thetas_symmetric)
-            # ground_truth = np.zeros(odf.shape[-1])
-            # ground_truth[np.digitize(thetas_symmetric, sample_points)] = 1.0 / len(thetas_symmetric)
-            # # ground_truth = gaussian_filter(ground_truth, sigma=1)
-            # js = np.apply_along_axis(lambda a: scipy.spatial.distance.jensenshannon(a, ground_truth), axis=-1, arr=odf)
-            # error = np.mean(js)
+            # first crop boundaries to remove artifacts related to averaging tensors near the edges.
+            edge_crop = int(2*tensor_sigma)
+            angles = angles[edge_crop:-edge_crop, edge_crop:-edge_crop]
+            i, j = [x//tile_size for x in angles.shape]
+            angles_ = np.array(angles[:i*tile_size,:j*tile_size]) # crop so angles divides evenly into tile_size (must create a new array to change stride lengths too.)
+            diff = np.zeros((i,j))
+            # reshape into tiles by manipulating strides. (np.reshape preserves contiguity of elements, which we don't want in this case)
+            nbits = angles_.strides[-1]
+            angles_ = np.lib.stride_tricks.as_strided(angles_, shape=(i,j,tile_size,tile_size), strides=(tile_size*angles_.shape[1]*nbits,tile_size*nbits,angles_.shape[1]*nbits,nbits))
+            angles_ = angles_.reshape(i,j,tile_size**2)
+            grid_thetas = np.array(grid_thetas)
+            for i in range(angles_.shape[0]):
+                for j in range(angles_.shape[1]):
+                    # kmeans = KMeans(n_clusters=2, random_state=0, algorithm='elkan').fit(angles_[i,j][~np.isnan(angles_[i,j])].reshape(-1,1))
+                    # mu_ = kmeans.cluster_centers_.reshape(-1)
+                    angles_tile = angles_[i,j][~np.isnan(angles_[i,j])]
+                    angles_tile = np.where(angles_tile < 0, angles_tile + np.pi, angles_tile)
+                    periodic_kmeans = PeriodicKMeans(angles_tile[...,None], period=np.pi, no_of_clusters=2)
+                    _, _, centers = periodic_kmeans.clustering()
+                    mu_ = np.array(centers).squeeze()
+                    mu_flipped = np.where(mu_ < 0, mu_ + np.pi, mu_ - np.pi)
+                    mu = np.stack((mu_,mu_flipped), axis=-1)
+                    # diff[i,j] = np.mean(np.min(np.abs(mu[...,None] - grid_thetas),axis=(-1,-2)), axis=-1) * 180/np.pi
+                    diff_ = np.abs(mu[...,None] - grid_thetas) # this has shape (2,2,2) for 2 mu values each with 2 possible orientations, and each compared to both ground truth angles
+                    argmin = np.array(np.unravel_index(np.argmin(diff_), (2,2,2))) # the closest mu value and orientation is the first error
+                    remaining_idx = 1 - argmin # the second error is the best error from the other mu value compared to the other ground truth angle
+                    diff[i,j] = np.mean([diff_[tuple(argmin)], np.min(diff_,1)[remaining_idx[0],remaining_idx[2]]]) * 180/np.pi
+            error = np.mean(diff)
         
         if display:
             fig, ax = plt.subplots(1,4, figsize=(12,4))
@@ -606,14 +629,6 @@ def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.
             ax[3].imshow(diff, extent=extent)
             ax[3].set_title('Difference')
             plt.show()
-
-            # # The below method produces errors because scipy.signal.find_peaks does not always find the exact number of peaks as thetas.
-            # odf_peaks = np.apply_along_axis(lambda a: scipy.signal.find_peaks(a, prominence=0.005)[0], axis=-1, arr=odf)
-            # # take only angles in the range -pi/2, pi/2
-            # peaks = np.apply_along_axis(lambda a: [p for p in sample_points[a] if p >= -np.pi/2 and p <= np.pi/2 ], axis=-1, arr=odf_peaks)
-            # assert peaks.shape[-1] == len(thetas), 'number of peaks detected does not equal the number of angles in the image'
-            # thetas.sort() # peaks are already be in order from least to greatest
-            # error.append( np.sum(np.abs(peaks - thetas)) / peaks.shape )
 
     return error
 
@@ -840,3 +855,24 @@ def run_tests(derivative_sigmas, tensor_sigmas, nIs, periods=[6], widths=[1], no
 #     print(ListOfPoints)
  
 # main()
+
+##########################################################################################################################################
+# phantom_tests methods for computing error on grid phantoms
+
+# # compare odf to the ground truth distribution using jenson-shannon divergence.
+# # the ground truth is a distribution of delta functions at the angles of the lines.
+# thetas_symmetric = np.concatenate((grid_thetas, np.array(grid_thetas) + np.pi))
+# thetas_symmetric = np.where(thetas_symmetric > np.pi, thetas_symmetric - 2*np.pi, thetas_symmetric)
+# ground_truth = np.zeros(odf.shape[-1])
+# ground_truth[np.digitize(thetas_symmetric, sample_points)] = 1.0 / len(thetas_symmetric)
+# # ground_truth = gaussian_filter(ground_truth, sigma=1)
+# js = np.apply_along_axis(lambda a: scipy.spatial.distance.jensenshannon(a, ground_truth), axis=-1, arr=odf)
+# error = np.mean(js)
+
+# # The below method produces errors because scipy.signal.find_peaks does not always find the exact number of peaks as thetas.
+# odf_peaks = np.apply_along_axis(lambda a: scipy.signal.find_peaks(a, prominence=0.005)[0], axis=-1, arr=odf)
+# # take only angles in the range -pi/2, pi/2
+# peaks = np.apply_along_axis(lambda a: [p for p in sample_points[a] if p >= -np.pi/2 and p <= np.pi/2 ], axis=-1, arr=odf_peaks)
+# assert peaks.shape[-1] == len(thetas), 'number of peaks detected does not equal the number of angles in the image'
+# thetas.sort() # peaks are already be in order from least to greatest
+# error.append( np.sum(np.abs(peaks - thetas)) / peaks.shape )

@@ -25,6 +25,7 @@ from dipy.core.sphere import disperse_charges, Sphere, HemiSphere
 from dipy.reconst.shm import sh_to_sf_matrix
 from fibermetric.utils import interp, read_matrix_data
 import matplotlib.pyplot as plt
+import math
 
 
 def load_img(impath, img_down=0, reverse_intensity=False):
@@ -43,7 +44,7 @@ def load_img(impath, img_down=0, reverse_intensity=False):
     return I
 
 
-def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1):
+def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1, masked=False):
     '''
     Construct structure tensors from a grayscale image. Accepts 2D or 3D arrays
 
@@ -65,10 +66,12 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1):
 
     '''
     if I.ndim == 2:
-        if type(dI) == float:
-            dy, dx = dI, dI
+        if isinstance(dI, (float,int)):
+            dI = (dI,dI)
         else:
-            dy,dx = dI
+            assert len(dI) == 2, f'dI must be a scalar or a tuple of length 2 for 2D images'
+    
+        dy,dx = dI
 
         Ix =  gaussian_filter(I, sigma=[derivative_sigma/dy, derivative_sigma/dx], order=(0,1)) / dI[1]
         # Ix = correlate1d(I, np.array([-1,0,1])/2.0/dx, 1)
@@ -88,14 +91,17 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1):
         # S = np.stack((Iyy, Ixy, Ixy, Ixx), axis=-1)
         S = np.stack((1-Ixx,-Ixy,-Ixy,1-Iyy), axis=-1) # identity minus the structure tensor
         # # null out the structure tensor where the norm is too small
-        # S[norm < 1e-5] = None
+        if masked:
+            S[norm < 1e-9] = None
         S = S.reshape((S.shape[:-1]+(2,2)))
 
     elif I.ndim == 3:
-        if type(dI) == float:
-            dz, dy, dx = dI, dI, dI
+        if isinstance(dI, (float,int)):
+            dI = (dI,dI,dI)
         else:
-            dz, dy, dx = dI
+            assert len(dI) == 3, f'dI must be a scalar or a tuple of length 3 for 3D images'
+    
+        dz,dy,dx = dI
 
         Ix =  gaussian_filter(I, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx], order=(0,0,1))
         # Ix = correlate1d(I, np.array([-1,0,1])/2.0/dx, 2)
@@ -173,8 +179,8 @@ def angles(S):
     w,v = np.linalg.eigh(S)
     v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue with all being > 0
     if w.shape[-1] == 2:
-        theta = (np.arctan2(v[...,1], v[...,0])) # row/col gives the counterclockwise angle from left/right direction.
-        # theta = np.arctan(v[...,1] / (v[...,0] + np.finfo(float).eps))
+        # theta = (np.arctan2(v[...,1], v[...,0])) # row/col gives the counterclockwise angle from left/right direction.
+        theta = np.arctan(v[...,1] / (v[...,0] + np.finfo(float).eps))
         return (theta,)
     else:
         x = v[...,0]
@@ -499,6 +505,7 @@ def vm_maximum_likelihood(sample_angles, verbose=False): # currently assumes two
     # run the optimization
     result = minimize(_vm_log_likelihood, theta, args=sample_angles, method='Nelder-Mead', options={'disp': verbose})
     mu = result.x[1::2]
+    mu = [math.fmod(m,np.pi) for m in mu]
     kappa = result.x[2::2]
     pi_1 = result.x[0]
     pi_2 = 1-pi
@@ -544,9 +551,9 @@ def odf2d_vonmises(theta, nbins, tile_size, n_components=2, verbose=False):
             # fit a mixture of von mises distributions to the histogram of angles
             # mu, kappa, pi = vonmises_mixture(theta[i,j,:], n_components=n_components, verbose=verbose)
             mu_, kappa_, pi_ = vm_maximum_likelihood(theta[i,j,:][~np.isnan(theta[i,j,:])], verbose=verbose)
-            mu[i,j,:] = mu_
-            kappa[i,j,:] = kappa_
-            pi[i,j,:] = pi_
+            mu[i,j] = mu_
+            kappa[i,j] = kappa_
+            pi[i,j] = pi_
             # create an odf from the fitted parameters
             for k in range(n_components):
                 # odf[i,j,:] += pi[k] * vonmises_density(np.linspace(-np.pi, np.pi, nbins), mu[k]*2, kappa[k]) # multiply mu by 2 to convert from [-pi/2,pi/2] to [-pi,pi]
