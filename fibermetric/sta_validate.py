@@ -331,6 +331,11 @@ def parallel_lines_2d(thetas, nI, period=6, width=2, noise=0.1):
 
 
 def parallel_lines_3D(shape, theta, phi, period, width=1, noise=0.0):
+    """
+    shape: tuple
+    theta: polar angle in the range [0,pi].
+    phi: azimuthal angle in the range [-pi/2, pi/2]
+    """
     Z,Y,X = shape
     # any anisotropy is only in the z dimension
     Zhat = Y # The length of Z in units is the same as X and Y. Use Zhat to remember that this is still the Z axis
@@ -354,8 +359,8 @@ def parallel_lines_3D(shape, theta, phi, period, width=1, noise=0.0):
         xstart = 0 if xsign == 1 else X + 2*np.ceil(np.abs(dx))
         # padx = int(np.ceil(np.abs(dx)))
         z0 = np.array([zstart])
-        y0 = np.arange(ystart, ystart + dy + ysign*Y + period, period)
-        x0 = np.arange(xstart, xstart + dx + xsign*X + period, period)
+        y0 = np.arange(ystart, ystart + ysign*(Y + np.ceil(np.abs(dy)) + period), period)
+        x0 = np.arange(xstart, xstart + xsign*(X + np.ceil(np.abs(dx)) + period), period)
 
     else: # pi/4 < theta < 3pi/4
         if np.abs(phi) <= np.pi/4 or np.abs(phi) >= 3*np.pi/4:
@@ -363,14 +368,14 @@ def parallel_lines_3D(shape, theta, phi, period, width=1, noise=0.0):
             dz = X * np.tan(np.pi/2 - theta)
             dx = xsign * X
             dy = dx * np.tan(phi)
-            zstart = 0 if zsign == 1 else Zhat + np.ceil(2*np.abs(dz))
+            zstart = 0 if zsign == 1 else Zhat + 2*np.ceil(np.abs(dz))
             # padz = int(np.ceil(np.abs(dz)))
-            ystart = 0 if zsign == 1 else Y + np.ceil(2*np.abs(dy))
+            ystart = 0 if zsign == 1 else Y + 2*np.ceil(np.abs(dy))
             # pady = int(np.ceil(np.abs(dy)))
             xstart = 0 if xsign == 1 else X
             # padx = 0
-            z0 = np.arange(zstart, zstart + dz + zsign*Zhat + period, period)
-            y0 = np.arange(ystart, ystart + dy + ysign*Y + period, period)
+            z0 = np.arange(zstart, zstart + zsign*(Zhat + np.ceil(np.abs(dz)) + period), period)
+            y0 = np.arange(ystart, ystart + ysign*(Y + np.ceil(np.abs(dy)) + period), period)
             x0 = np.array([xstart])
 
         else: # pi/4 < abs(phi) < 3pi/4
@@ -384,9 +389,9 @@ def parallel_lines_3D(shape, theta, phi, period, width=1, noise=0.0):
             # pady = int(np.ceil(np.abs(dy)))
             xstart = 0 if xsign == 1 else X + 2*np.ceil(np.abs(dx))
             # padx = int(np.ceil(np.abs(dx)))
-            z0 = np.arange(zstart, zstart + dz + zsign*Zhat + period, period)
+            z0 = np.arange(zstart, zstart + zsign*(Zhat + np.ceil(np.abs(dz)) + period), period)
             y0 = np.array([ystart])
-            x0 = np.arange(xstart, xstart + dx + xsign*X + period, period)
+            x0 = np.arange(xstart, xstart + xsign*(X + np.ceil(np.abs(dx)) + period), period)
     z1 = z0 + dz
     y1 = y0 + dy
     x1 = x0 + dx
