@@ -330,6 +330,83 @@ def parallel_lines_2d(thetas, nI, period=6, width=2, noise=0.1):
     return I, labels, extent
 
 
+# def out_of_bounds(img_borders, theta, p0):
+    
+#     slope = np.tan(theta)
+#     slope_inv = 1/(slope+np.finfo(float).eps)
+#     y0, x0 = p0
+#     ymax, xmax = img_borders
+#     y_at_xmax = slope * (xmax-x0) + y0
+#     y_at_xmin = slope * (-xmax-x0) + y0
+#     x_at_ymax = slope_inv * (ymax-y0) + x0
+#     x_at_ymin = slope_inv * (-ymax-y0) + x0
+#     out_of_bounds = y_at_xmax > ymax and y_at_xmin < 0.0 and x_at_ymax > xmax and x_at_ymin < 0.0
+    
+#     return out_of_bounds
+
+def out_of_bounds(img_borders, theta, p):
+    """ determine if the line intersects with the convex polygon defined by the image borders.
+    """
+    slope = np.tan(theta)
+    y,x = p
+    x0 = x - slope*y
+    a = np.array([-np.sin(theta), np.cos(theta)]) # the vector normal to the line
+    # vertices = np.array([[-y0,0], [-y0,img_borders[1]], [img_borders[0]-y0,img_borders[1]], [img_borders[0]-y0,0]])
+    vertices = np.array([[0,-x0], [0,img_borders[1]-x0], [img_borders[0],img_borders[1]-x0], [img_borders[0],-x0]])
+    # project the vertices onto the normal vector
+    proj = vertices@a[:,None]
+    # if the projection of the vertices onto the normal vector are all positive or all negative, then the line does not intersect the polygon
+    out_of_bounds = np.all(proj > 0) or np.all(proj < 0)
+    return out_of_bounds
+
+def parallel_lines_2d_v01(thetas, nI, period=6, noise=0.1):
+    multiple = 1.0
+    dI = [nI[1]/nI[0], 1.0]
+    xI = [np.arange(n)*d for n,d in zip(nI,dI)]
+    XI = np.stack(np.meshgrid(*xI, indexing='ij'), axis=-1)
+    # create the image with added noise and the mask and labels
+    np.random.seed(1)
+    I = np.random.randn(*nI)*noise
+
+    for i in range(len(thetas)):
+        theta = thetas[i]
+        y_step = -np.sin(theta)*period
+        x_step = np.cos(theta)*period
+
+        sigma = (np.sin(theta)*dI[0]*multiple)**2 + (np.cos(theta)*dI[1]*multiple)**2
+
+        # draw the line through the center of the image
+        c0 = np.array([(nI[0]-1)*dI[0]/2, (nI[1]-1)*dI[1]/2])
+        # dist = (XI - c0)@np.array([-np.sin(theta),np.cos(theta)])
+        dist = (XI - c0)@np.array([-np.sin(theta), np.cos(theta)])
+        I += np.exp(-0.5 * dist**2 / sigma) /np.sqrt(2.0*np.pi*sigma)
+
+        shift = np.array([0.0, 0.0])
+        while 1:
+            shift += np.array([y_step, x_step])
+            # shift the line to the left and right by the period
+            center = c0 + shift
+            # check if the line is out of bounds
+            oob = out_of_bounds(((nI[0]-1)*dI[0], (nI[1]-1)*dI[1]), theta, center)
+            if oob:
+                break
+            dist = (XI - center)@np.array([-np.sin(theta), np.cos(theta)])
+
+            I += np.exp(-0.5 * dist**2 / sigma) /np.sqrt(2.0*np.pi*sigma)
+
+            center = c0 - shift
+            oob = out_of_bounds(((nI[0]-1)*dI[0], (nI[1]-1)*dI[1]), theta, center)
+            if oob:
+                break
+            # dist = (XI - center)@np.array([-np.sin(theta),np.cos(theta)])
+            dist = (XI - center)@np.array([-np.sin(theta), np.cos(theta)])
+            I += np.exp(-0.5 * dist**2 / sigma) /np.sqrt(2.0*np.pi*sigma)
+
+        extent = (0,nI[1]*dI[1], nI[0]*dI[0], 0)
+
+    return I, extent
+
+
 def parallel_lines_3D(shape, theta, phi, period, width=1, noise=0.0):
     """
     shape: tuple
