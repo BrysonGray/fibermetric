@@ -190,16 +190,29 @@ def get_endpoints(img_borders, theta, p0):
     out_of_bounds: bool
 
     """
+    slope = np.tan(theta)
+    # y,x = p0
+    # x0 = x - slope*y
+    # a = np.array([-np.sin(theta), np.cos(theta)]) # the vector normal to the line
+    # # vertices = np.array([[-y0,0], [-y0,img_borders[1]], [img_borders[0]-y0,img_borders[1]], [img_borders[0]-y0,0]])
+    # vertices = np.array([[0,-x0], [0,img_borders[1]-x0], [img_borders[0],img_borders[1]-x0], [img_borders[0],-x0]])
+    # # project the vertices onto the normal vector
+    # proj = vertices@a[:,None]
+    # # if the projection of the vertices onto the normal vector are all positive or all negative, then the line does not intersect the polygon
+    # out_of_bounds = np.all(proj > 0) or np.all(proj < 0)
     def slope_intercept_formula(x, slope, b):
         return slope * x + b
-    slope = np.tan(theta)
-    slope_inv = 1/(slope+np.finfo(float).eps)
     y0, x0 = p0
+    slope_inv = 1/(slope+np.finfo(float).eps)
     ymax, xmax = img_borders
     y_at_xmax = slope_intercept_formula(xmax-x0, slope, y0)
     y_at_xmin = slope_intercept_formula(-xmax-x0, slope, y0)
     x_at_ymax = slope_intercept_formula(ymax-y0, slope_inv, x0)
     x_at_ymin = slope_intercept_formula(-ymax-y0, slope_inv, x0)
+    # y_at_xmax = slope_inv*(xmax-x) + y
+    # y_at_xmin = slope_inv*(-xmax-x) + y
+    # x_at_ymax = slope*(ymax-y) + x
+    # x_at_ymin = slope*(-ymax-y) + x
     out_of_bounds = np.abs(y_at_xmax) > ymax and np.abs(y_at_xmin) > ymax and np.abs(x_at_ymax) > xmax and np.abs(x_at_ymin) > xmax
     if slope >= 0:
         endpoint = (y_at_xmax, xmax) if np.abs(y_at_xmax) <= ymax else (ymax, x_at_ymax)
@@ -294,6 +307,8 @@ def parallel_lines_2d(thetas, nI, period=6, width=2, noise=0.1):
         theta = thetas[i]
         x_step = np.cos(theta+np.pi/2)*period
         y_step = np.sin(theta+np.pi/2)*period
+        # x_step = np.cos(theta)*period
+        # y_step = np.sin(theta)*period
         cy = 0
         cx = 0
         start, end, _ = get_endpoints(borders, theta, p0=(cy,cx))
@@ -330,20 +345,6 @@ def parallel_lines_2d(thetas, nI, period=6, width=2, noise=0.1):
     return I, labels, extent
 
 
-# def out_of_bounds(img_borders, theta, p0):
-    
-#     slope = np.tan(theta)
-#     slope_inv = 1/(slope+np.finfo(float).eps)
-#     y0, x0 = p0
-#     ymax, xmax = img_borders
-#     y_at_xmax = slope * (xmax-x0) + y0
-#     y_at_xmin = slope * (-xmax-x0) + y0
-#     x_at_ymax = slope_inv * (ymax-y0) + x0
-#     x_at_ymin = slope_inv * (-ymax-y0) + x0
-#     out_of_bounds = y_at_xmax > ymax and y_at_xmin < 0.0 and x_at_ymax > xmax and x_at_ymin < 0.0
-    
-#     return out_of_bounds
-
 def out_of_bounds(img_borders, theta, p):
     """ determine if the line intersects with the convex polygon defined by the image borders.
     """
@@ -359,7 +360,7 @@ def out_of_bounds(img_borders, theta, p):
     out_of_bounds = np.all(proj > 0) or np.all(proj < 0)
     return out_of_bounds
 
-def parallel_lines_2d_v01(thetas, nI, period=6, noise=0.1):
+def parallel_lines_2d_v01(thetas, nI, period=6, noise=0.1, display=False):
     multiple = 1.0
     dI = [nI[1]/nI[0], 1.0]
     xI = [np.arange(n)*d for n,d in zip(nI,dI)]
@@ -367,6 +368,7 @@ def parallel_lines_2d_v01(thetas, nI, period=6, noise=0.1):
     # create the image with added noise and the mask and labels
     np.random.seed(1)
     I = np.random.randn(*nI)*noise
+    labels = np.zeros(nI)
 
     for i in range(len(thetas)):
         theta = thetas[i]
@@ -374,12 +376,17 @@ def parallel_lines_2d_v01(thetas, nI, period=6, noise=0.1):
         x_step = np.cos(theta)*period
 
         sigma = (np.sin(theta)*dI[0]*multiple)**2 + (np.cos(theta)*dI[1]*multiple)**2
+        line_thresh = np.exp(-0.5)/np.sqrt(2.0*np.pi*sigma)
 
         # draw the line through the center of the image
         c0 = np.array([(nI[0]-1)*dI[0]/2, (nI[1]-1)*dI[1]/2])
         # dist = (XI - c0)@np.array([-np.sin(theta),np.cos(theta)])
         dist = (XI - c0)@np.array([-np.sin(theta), np.cos(theta)])
-        I += np.exp(-0.5 * dist**2 / sigma) /np.sqrt(2.0*np.pi*sigma)
+        line = np.exp(-0.5 * dist**2 / sigma) / np.sqrt(2.0*np.pi*sigma)
+        I += line
+        if display == True:
+            line_label = np.where(line > line_thresh, theta, 0.0)
+            labels += line_label
 
         shift = np.array([0.0, 0.0])
         while 1:
@@ -391,8 +398,12 @@ def parallel_lines_2d_v01(thetas, nI, period=6, noise=0.1):
             if oob:
                 break
             dist = (XI - center)@np.array([-np.sin(theta), np.cos(theta)])
+            line = np.exp(-0.5 * dist**2 / sigma) /np.sqrt(2.0*np.pi*sigma)
+            I += line
+            if display == True:
+                line_label = np.where(line > line_thresh, theta, 0.0)
+                labels += line_label
 
-            I += np.exp(-0.5 * dist**2 / sigma) /np.sqrt(2.0*np.pi*sigma)
 
             center = c0 - shift
             oob = out_of_bounds(((nI[0]-1)*dI[0], (nI[1]-1)*dI[1]), theta, center)
@@ -400,11 +411,17 @@ def parallel_lines_2d_v01(thetas, nI, period=6, noise=0.1):
                 break
             # dist = (XI - center)@np.array([-np.sin(theta),np.cos(theta)])
             dist = (XI - center)@np.array([-np.sin(theta), np.cos(theta)])
-            I += np.exp(-0.5 * dist**2 / sigma) /np.sqrt(2.0*np.pi*sigma)
+            line = np.exp(-0.5 * dist**2 / sigma) /np.sqrt(2.0*np.pi*sigma)
+            I += line
+            if display == True:
+                line_label = np.where(line > line_thresh, theta, 0.0)
+                labels += line_label
 
-        extent = (0,nI[1]*dI[1], nI[0]*dI[0], 0)
+    labels = np.where(np.any(labels[...,None] == np.array(thetas)[None,None], axis=2), labels, 0.0)
 
-    return I, extent
+    extent = (0,nI[1]*dI[1], nI[0]*dI[0], 0)
+
+    return I, labels, extent
 
 
 def parallel_lines_3D(shape, theta, phi, period, width=1, noise=0.0):
@@ -483,6 +500,19 @@ def parallel_lines_3D(shape, theta, phi, period, width=1, noise=0.0):
     for start,end in zip(start_points.reshape(-1,3), end_points.reshape(-1,3)):
         large_img = draw_line_3D(large_img, start, end)
     # crop the large image to the final shape.
+
+
+    def parallel_lines_3D_v01(shape, thetas, phis, period, width=1, noise=0.0):
+        multiple = 1.0
+        dI = [nI[1]/nI[0], 1.0]
+        xI = [np.arange(n)*d for n,d in zip(nI,dI)]
+        XI = np.stack(np.meshgrid(*xI, indexing='ij'), axis=-1)
+        # create the image with added noise and the mask and labels
+        np.random.seed(1)
+        I = np.random.randn(*nI)*noise
+        labels = np.zeros(nI)
+    
+        return
 
     img = large_img[pad[0]:large_img_shape[0]-(pad[0]+r[0]), pad[1]:large_img_shape[1]-(pad[1]+r[1]), pad[2]:large_img_shape[2]-(pad[2]+r[2])]
     print('test')
@@ -598,8 +628,28 @@ def anisotropy_correction(image, labels, dI, direction='up', interpolation=cv2.I
     return image_corrected, labels_corrected, extent
 
 
+def periodic_mean(points, period=180):
+    period_2 = period/2
+    if max(points) - min(points) > period_2:
+        _points = np.array([0 if x > period_2 else 1 for x in points]).reshape(-1,1)
+        n_left =_points.sum()
+        n_right = len(points) - n_left
+        if n_left >0:
+            mean_left = (points * _points).sum()/n_left
+        else:
+            mean_left =0
+        if n_right >0:
+            mean_right = (points * (1-_points)).sum() / n_right
+        else:
+            mean_right = 0
+        _mean = (mean_left*n_left+mean_right*n_right+n_left*period)/(n_left+n_right)
+        return _mean % period
+    else:
+        return points.mean(axis=0)
+
+
 def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.05,\
-                 phantom='grid', err_type='pixelwise', grid_thetas=None, tile_size=None, dim=2, display=False):
+                 phantom='grid', err_type='pixelwise', grid_thetas=None, tile_size=None, crop=None, dim=2, display=False):
     """Test structure tensor analysis on a grid of crossing lines.
     Parameters
     ----------
@@ -612,8 +662,7 @@ def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.
     nI : tuple of int
         Number of pixels in each dimension.
     grid_thetas : tuple of float
-        Angles of the lines in radians in the range [-pi/2, pi/2]. One angle for 2D, two
-        angles (polar and azimuthal) for 3D.
+        Angles of the lines in radians in the range [-pi/2, pi/2]. Takes one or two line orientations.
     width : int
         Width of the lines.
     noise : float
@@ -641,11 +690,11 @@ def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.
         assert phantom in ('grid', 'circles')
         assert err_type in ('pixelwise', 'piecewise')
         if phantom == 'grid':
-            assert isinstance(grid_thetas, (list, tuple)), 'grid_thetas must be a list\
-                or tuple of angles when using a grid phantom.'
+            assert isinstance(grid_thetas, (list, tuple)), 'grid_thetas must be a list or tuple of angles when using a grid phantom.'
             assert np.alltrue([np.abs(theta) <= np.pi/2 for theta in grid_thetas]),\
             'thetas must be in the range [-pi/2, pi/2]'
-            I, labels, extent = parallel_lines_2d(grid_thetas, nI, width=width, noise=noise, period=period)
+            # I, labels, extent = parallel_lines_2d(grid_thetas, nI, width=width, noise=noise, period=period)
+            I, labels, extent = parallel_lines_2d_v01(grid_thetas, nI, noise=noise, period=period, display=display)
             masked = False
         elif phantom == 'circles':
             I, labels, extent = circle(nI, period=period, width=width, noise=noise)
@@ -672,8 +721,12 @@ def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.
             if tile_size is None:
                 tile_size = nI[1] // 10 # default to ~100 tiles in the image
             # first crop boundaries to remove artifacts related to averaging tensors near the edges.
-            edge_crop = int(2*tensor_sigma)
-            angles = angles[edge_crop:-edge_crop, edge_crop:-edge_crop]
+
+            if crop is None:
+                crop = 15
+            elif crop > 0:
+                edge_crop = [np.floor(crop/dI[0]).astype('int'), crop] #np.floor(4*tensor_sigma).astype('int')]
+                angles = angles[edge_crop[0]:-edge_crop[0], edge_crop[1]:-edge_crop[1]]
             i, j = [x//tile_size for x in angles.shape]
             angles_ = np.array(angles[:i*tile_size,:j*tile_size]) # crop so angles divides evenly into tile_size (must create a new array to change stride lengths too.)
             diff = np.zeros((i,j))
@@ -682,22 +735,29 @@ def phantom_test(derivative_sigma, tensor_sigma, nI, period=6, width=1, noise=0.
             angles_ = np.lib.stride_tricks.as_strided(angles_, shape=(i,j,tile_size,tile_size), strides=(tile_size*angles_.shape[1]*nbits,tile_size*nbits,angles_.shape[1]*nbits,nbits))
             angles_ = angles_.reshape(i,j,tile_size**2)
             grid_thetas = np.array(grid_thetas)
+
             for i in range(angles_.shape[0]):
                 for j in range(angles_.shape[1]):
                     # kmeans = KMeans(n_clusters=2, random_state=0, algorithm='elkan').fit(angles_[i,j][~np.isnan(angles_[i,j])].reshape(-1,1))
                     # mu_ = kmeans.cluster_centers_.reshape(-1)
                     angles_tile = angles_[i,j][~np.isnan(angles_[i,j])]
-                    angles_tile = np.where(angles_tile < 0, angles_tile + np.pi, angles_tile)
-                    periodic_kmeans = PeriodicKMeans(angles_tile[...,None], period=np.pi, no_of_clusters=2)
-                    _, _, centers = periodic_kmeans.clustering()
-                    mu_ = np.array(centers).squeeze()
+                    angles_tile = np.where(angles_tile < 0, angles_tile + np.pi, angles_tile) # flip angles to be in the range [0,pi] for periodic kmeans
+                    if len(grid_thetas) == 1:
+                        mu_ = periodic_mean(angles_tile.flatten()[...,None], period=np.pi)
+                    else:
+                        periodic_kmeans = PeriodicKMeans(angles_tile[...,None], period=np.pi, no_of_clusters=2)
+                        _, _, centers = periodic_kmeans.clustering()
+                        mu_ = np.array(centers).squeeze()
                     mu_flipped = np.where(mu_ < 0, mu_ + np.pi, mu_ - np.pi)
                     mu = np.stack((mu_,mu_flipped), axis=-1)
                     # diff[i,j] = np.mean(np.min(np.abs(mu[...,None] - grid_thetas),axis=(-1,-2)), axis=-1) * 180/np.pi
                     diff_ = np.abs(mu[...,None] - grid_thetas) # this has shape (2,2,2) for 2 mu values each with 2 possible orientations, and each compared to both ground truth angles
-                    argmin = np.array(np.unravel_index(np.argmin(diff_), (2,2,2))) # the closest mu value and orientation is the first error
-                    remaining_idx = 1 - argmin # the second error is the best error from the other mu value compared to the other ground truth angle
-                    diff[i,j] = np.mean([diff_[tuple(argmin)], np.min(diff_,1)[remaining_idx[0],remaining_idx[2]]]) * 180/np.pi
+                    if len(grid_thetas) == 1:
+                        diff[i,j] = np.min(diff_) * 180/np.pi
+                    else:
+                        argmin = np.array(np.unravel_index(np.argmin(diff_), (2,2,2))) # the closest mu value and orientation is the first error
+                        remaining_idx = 1 - argmin # the second error is the best error from the other mu value compared to the other ground truth angle
+                        diff[i,j] = np.mean([diff_[tuple(argmin)], np.min(diff_,1)[remaining_idx[0],remaining_idx[2]]]) * 180/np.pi
             error = np.mean(diff)
         
         if display:

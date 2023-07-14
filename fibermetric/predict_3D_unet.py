@@ -13,16 +13,6 @@ import numpy as np
 import os
 
 
-# Train a U-Net to predict the third component of the principal eigenvector given the 2x2 upper left submatrix of the diffusion tensor
-# This is a regression problem, so we'll use mean squared error as the loss function
-# We'll use the Adam optimizer, which is a variant of stochastic gradient descent
-# We'll use a U-Net with 3 layers
-# We'll use a learning rate of 0.001
-# We'll train for 100 epochs
-# We'll use a batch size of 32
-# We'll use a 90/10 train/test split
-# We'll use a 90/10 train/validation split
-
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f'Using device: {device}')
 
@@ -247,7 +237,9 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     test_loader = DataLoader(validation_dataset, batch_size=args.batch_size, shuffle=True)
     model = UNet2D(n_channels=3).to(device)
+    # This is a regression problem, so we'll use mean squared error as the loss function
     loss_fn = nn.MSELoss().to(device)
+    # We'll use the Adam optimizer, which is a variant of stochastic gradient descent
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     # we'll use lr_scheduler to reduce the learning rate by a factor of 0.1 when the validation loss plateaus
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)

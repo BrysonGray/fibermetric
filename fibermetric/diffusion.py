@@ -6,7 +6,8 @@ import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 import os
 from dipy.core.sphere import Sphere
-from dipy.reconst.shm import sh_to_sf
+from dipy.data import get_sphere
+from dipy.reconst.shm import sh_to_sf, sh_to_sf_matrix
 from tqdm import tqdm
 import sympy
 from sympy import Ynm, Symbol, integrate
@@ -64,13 +65,6 @@ def ppd(tensors,J):
     R2 = rot(R1e1, phi)
 
     Q = R2 @ R1
-
-    return Q
-    
-
-# TODO: finite strain
-def fs(J):
-    Q = J / (J @ np.transpose(J, axes=(0,1,2,4,3)))**(-1/2)
 
     return Q
 
@@ -275,11 +269,11 @@ def sh_to_cf(sh_signal, ndir, source):
     print(f'Y matrix shape: {Y_matrix.shape}')
     for t in tqdm(range(ndir)):
         for i,y in enumerate(Yphi):
-            x = t*2*np.pi/ndir
-            Y_matrix[t,i] = float(y.evalf(subs={phi:x}))
+            sample_points = t*2*np.pi/ndir
+            Y_matrix[t,i] = float(y.evalf(subs={phi:sample_points}))
     cf = np.moveaxis(np.squeeze(Y_matrix @ np.moveaxis(sh_signal,0,-1)[...,None]),-1,0)
 
-    return cf
+    return cf, sample_points
 
 def load_odf(path):
     files = os.listdir(path) 
@@ -293,6 +287,75 @@ def load_odf(path):
     I = np.array(sh_list)
 
     return I
+
+def transform_odf(J, odf, sphere):
+
+    theta = sphere.theta
+    phi = sphere.phi
+    v_ = (sphere.vertices @ J).T
+    r_ = np.linalg.norm(v_)
+    x_, y_, z_ = v_
+    theta_ = np.arccos(z_/r_)
+    J_1 = np.stack((np.sin(theta)*np.cos(phi), np.cos(theta)*np.cos(phi), -np.sin(theta)*np.sin(phi),
+                    np.sin(theta)*np.sin(phi), np.cos(theta)*np.sin(phi), np.sin(theta)*np.cos(phi),
+                    np.cos(theta), -np.sin(theta), np.zeros(len(theta))), axis=-1).reshape((len(theta), 3, 3))
+    J_3 = np.stack((x_/r_, y_/r_, z_/r_,
+                    x_*z_/np.sqrt(x_**2 + y_**2*r_**2), y_*z_/np.sqrt(x_**2 + y_**2*r_**2), -np.sqrt(x_**2 + y_**2)/r_**2,
+                    -y_/(x_**2 + y_**2), x_/(x_**2 + y_**2), np.zeros(len(theta))), axis=-1).reshape((len(theta), 3, 3))
+    
+    J_polar = J_3 @ J @ J_1
+    scale_factor = np.sin(theta)/np.sin(theta_) * 1/np.abs(np.linalg.det(J_polar[...,1:,1:]))
+    odf_ = odf*scale_factor
+
+    return odf_, v_
+
+
+def transform_sh_img(sh, J):
+    ''' Transform a spherical harmonic image by a Jacobian valued image
+    For algorithm details see:
+    
+    Hong, X., Arlinghaus, L. R., & Anderson, A. W. (2009).
+    Spatial normalization of the fiber orientation distribution based on high angular resolution diffusion imaging data.
+    Magnetic resonance in medicine, 61(6), 1520–1527. https://doi.org/10.1002/mrm.21916
+
+    Parameters
+    ----------
+    sh : spherical harmonics
+    J : Jacobian
+
+    Returns
+    -------
+    sh_transformed : spherical harmonic coefficients transformed by J
+    '''
+
+    degree = {1:0,
+            2:6,
+            15:4,
+            28:6,
+            45:8,
+            66:10,
+            91:12,
+            120:14}
+    n = degree[sh.shape[-1]]
+    print(f'spherical harmonic degree is {n}.')
+    arr_shape = sh.shape[:-1]
+    sh = sh.reshape(-1,sh.shape[-1])
+    J = J.reshape(-1,3,3)
+    sphere = get_sphere('symmetric362')
+    B, invB = sh_to_sf_matrix(sphere, n)
+    # transform each odf sequentially because of memory constraints
+    sh_transformed = np.zeros_like(sh)
+    for i in range(len(sh)):
+        # transform from spherical harmonics to spherical function
+        odf = np.dot(sh[i], B)
+        # transform vectors
+        odf, vertices = transform_odf(J[i], odf, sphere)
+        # transform back into spherical harmonics
+        B, invB = sh_to_sf_matrix(vertices, n)
+        sh_transformed[i] = np.dot(invB.T, odf)
+    sh_transformed = sh_transformed.reshape(arr_shape+sh.shape[-1])
+    
+    return sh_transformed
 
 def main():
     # parse arguments
