@@ -62,7 +62,7 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1, masked=Fal
     Returns
     -------
     S : array
-        Array of structure tensors with image dimensions along the first axes and tensors in the last two dimensions.
+        Array of structure tensors with image dimensions along the first axes and tensors in the last two dimensions. Tensors are arranged in x-y-z (i.e. col-row-slice) order.
 
     '''
     if I.ndim == 2:
@@ -79,9 +79,9 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1, masked=Fal
         Iy =  gaussian_filter(I, sigma=[derivative_sigma/dy, derivative_sigma/dx], order=(1,0))
         # Iy = correlate1d(I, np.array([-1,0,1])/2.0/dy, 0)
         # Iy = gaussian_filter(Iy, sigma=[derivative_sigma/dy, derivative_sigma/dx])
-        # norm = np.sqrt(Ix**2 + Iy**2) + np.finfo(float).eps
-        # Ix = Ix / norm
-        # Iy = Iy / norm
+        norm = np.sqrt(Ix**2 + Iy**2) + np.finfo(float).eps
+        Ix = Ix / norm
+        Iy = Iy / norm
 
         # construct the structure tensor, s
         Ixx = gaussian_filter(Ix*Ix, sigma=[tensor_sigma/dy, tensor_sigma/dx])
@@ -162,7 +162,7 @@ def anisotropy(w):
     return A
 
 
-def angles(S):
+def angles(S, cartesian=False):
     """
     Compute angles from structure tensors.
 
@@ -177,20 +177,24 @@ def angles(S):
         Array of values between -pi/2 and pi/2.
     """
     w,v = np.linalg.eigh(S)
+    # TODO: maybe v should be a copy?
     v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue with all being > 0
+    # Remember that structure tensors are in x-y-z order so the first component is x, second is y, and third is z.
     if w.shape[-1] == 2:
-        # theta = (np.arctan2(v[...,1], v[...,0])) 
-        # theta = np.arctan(v[...,1] / (v[...,0] + np.finfo(float).eps))
-        theta = np.arctan(v[...,0] / (v[...,1] + np.finfo(float).eps))# row/col gives the counterclockwise angle from left/right direction.
-        return (theta,)
+        if cartesian:
+            return v
+        theta = np.arctan(v[...,0] / (v[...,1] + np.finfo(float).eps))# x/y gives the counterclockwise angle from the vertical direction (y axis).
+        return theta
     else:
+        if cartesian:
+            return v
         x = v[...,0]
         y = v[...,1]
         z = v[...,2]
-        theta = np.arctan2(-z, np.sqrt(x**2 + y**2)) + np.pi / 2  # range is (0,pi)
-        phi = np.arctan2(y, x) # range (-pi/2, pi/2)
-        return (theta,phi)
-        # return (x,y,z)
+        theta = np.arctan(np.sqrt(x**2 + y**2) / (z + np.finfo(float).eps))  # range is (-pi/2,pi/2)
+        theta = np.where(theta < 0, theta + np.pi, theta) # range is (0,pi)
+        phi = np.arctan(x / (y + np.finfo(float).eps)) # range (-pi/2, pi/2)
+        return np.stack((theta,phi), axis=-1)
 
 
 def hsv(S, I):
