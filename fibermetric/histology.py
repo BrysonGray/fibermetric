@@ -8,11 +8,7 @@ Author: Bryson Gray
 
 '''
 
-from scipy.ndimage import gaussian_filter, sobel, correlate1d
-from scipy.stats import vonmises
-from scipy.special import iv
-from scipy.optimize import fsolve, minimize
-from sklearn.cluster import KMeans
+from scipy.ndimage import gaussian_filter
 import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2,40).__str__()
 import cv2
@@ -23,9 +19,9 @@ import argparse
 import h5py
 from dipy.core.sphere import disperse_charges, Sphere, HemiSphere
 from dipy.reconst.shm import sh_to_sf_matrix
-from fibermetric.utils import interp, read_matrix_data
-import matplotlib.pyplot as plt
-import math
+# from fibermetric.utils import interp, read_matrix_data
+from utils import interp, read_matrix_data
+
 
 
 def load_img(impath, img_down=0, reverse_intensity=False):
@@ -44,7 +40,7 @@ def load_img(impath, img_down=0, reverse_intensity=False):
     return I
 
 
-def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1, masked=False):
+def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, normalize=True, masked=False):
     '''
     Construct structure tensors from a grayscale image. Accepts 2D or 3D arrays
 
@@ -56,9 +52,6 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1, masked=Fal
         Standard deviation for Gaussian kernel. The standard deviations of the Gaussian filter
         are given for each axis as a sequence, or as a single number, in which case it is equal
         for all axes.
-    dI : int or tuple, optional
-        Image pixel dimensions. The derivative and gaussian kernel standard deviation is scaled by the inverse of the pixel size.
-        If int, all dimensions are treated as the same size.
     Returns
     -------
     S : array
@@ -66,27 +59,22 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1, masked=Fal
 
     '''
     if I.ndim == 2:
-        if isinstance(dI, (float,int)):
-            dI = (dI,dI)
-        else:
-            assert len(dI) == 2, f'dI must be a scalar or a tuple of length 2 for 2D images'
-    
-        dy,dx = dI
 
-        Ix =  gaussian_filter(I, sigma=[derivative_sigma/dy, derivative_sigma/dx], order=(0,1))
+        Ix =  gaussian_filter(I, sigma=[derivative_sigma, derivative_sigma], order=(0,1))
         # Ix = correlate1d(I, np.array([-1,0,1])/2.0/dx, 1)
         # Ix = gaussian_filter(Ix, sigma=[derivative_sigma/dy, derivative_sigma/dx])
-        Iy =  gaussian_filter(I, sigma=[derivative_sigma/dy, derivative_sigma/dx], order=(1,0))
+        Iy =  gaussian_filter(I, sigma=[derivative_sigma, derivative_sigma], order=(1,0))
         # Iy = correlate1d(I, np.array([-1,0,1])/2.0/dy, 0)
         # Iy = gaussian_filter(Iy, sigma=[derivative_sigma/dy, derivative_sigma/dx])
         norm = np.sqrt(Ix**2 + Iy**2) + np.finfo(float).eps
-        Ix = Ix / norm
-        Iy = Iy / norm
+        if normalize:
+            Ix = Ix / norm
+            Iy = Iy / norm
 
         # construct the structure tensor, s
-        Ixx = gaussian_filter(Ix*Ix, sigma=[tensor_sigma/dy, tensor_sigma/dx])
-        Ixy = gaussian_filter(Ix*Iy, sigma=[tensor_sigma/dy, tensor_sigma/dx])
-        Iyy = gaussian_filter(Iy*Iy, sigma=[tensor_sigma/dy, tensor_sigma/dx])
+        Ixx = gaussian_filter(Ix*Ix, sigma=[tensor_sigma, tensor_sigma])
+        Ixy = gaussian_filter(Ix*Iy, sigma=[tensor_sigma, tensor_sigma])
+        Iyy = gaussian_filter(Iy*Iy, sigma=[tensor_sigma, tensor_sigma])
 
         # S = np.stack((Iyy, Ixy, Ixy, Ixx), axis=-1)
         S = np.stack((1-Ixx,-Ixy,-Ixy,1-Iyy), axis=-1) # identity minus the structure tensor
@@ -96,34 +84,29 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, dI=1, masked=Fal
         S = S.reshape((S.shape[:-1]+(2,2)))
 
     elif I.ndim == 3:
-        if isinstance(dI, (float,int)):
-            dI = (dI,dI,dI)
-        else:
-            assert len(dI) == 3, f'dI must be a scalar or a tuple of length 3 for 3D images'
-    
-        dz,dy,dx = dI
 
-        Ix =  gaussian_filter(I, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx], order=(0,0,1))
+        Ix =  gaussian_filter(I, sigma=[derivative_sigma, derivative_sigma, derivative_sigma], order=(0,0,1))
         # Ix = correlate1d(I, np.array([-1,0,1])/2.0/dx, 2)
         # Ix = gaussian_filter(Ix, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
-        Iy =  gaussian_filter(I, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx], order=(0,1,0))
+        Iy =  gaussian_filter(I, sigma=[derivative_sigma, derivative_sigma, derivative_sigma], order=(0,1,0))
         # Iy = correlate1d(I,np.array([-1,0,1])/2.0/dy,1)
         # Iy = gaussian_filter(Iy, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
-        Iz =  gaussian_filter(I, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx], order=(1,0,0))
+        Iz =  gaussian_filter(I, sigma=[derivative_sigma, derivative_sigma, derivative_sigma], order=(1,0,0))
         # Iz = correlate1d(I, np.array([-1,0,1])/2.0/dz, 0)
         # Iz = gaussian_filter(Iz, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
 
         norm = np.sqrt(Ix**2 + Iy**2 + Iz**2) + np.finfo(float).eps
-        Ix = Ix / norm
-        Iy = Iy / norm
-        Iz = Iz / norm
+        if normalize:
+            Ix = Ix / norm
+            Iy = Iy / norm
+            Iz = Iz / norm
 
-        Ixx = gaussian_filter(Ix*Ix, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
-        Iyy = gaussian_filter(Iy*Iy, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
-        Izz = gaussian_filter(Iz*Iz, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
-        Ixy = gaussian_filter(Ix*Iy, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
-        Ixz = gaussian_filter(Ix*Iz, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
-        Iyz = gaussian_filter(Iy*Iz, sigma=[tensor_sigma/dz, tensor_sigma/dy, tensor_sigma/dx])
+        Ixx = gaussian_filter(Ix*Ix, sigma=[tensor_sigma, tensor_sigma, tensor_sigma])
+        Iyy = gaussian_filter(Iy*Iy, sigma=[tensor_sigma, tensor_sigma, tensor_sigma])
+        Izz = gaussian_filter(Iz*Iz, sigma=[tensor_sigma, tensor_sigma, tensor_sigma])
+        Ixy = gaussian_filter(Ix*Iy, sigma=[tensor_sigma, tensor_sigma, tensor_sigma])
+        Ixz = gaussian_filter(Ix*Iz, sigma=[tensor_sigma, tensor_sigma, tensor_sigma])
+        Iyz = gaussian_filter(Iy*Iz, sigma=[tensor_sigma, tensor_sigma, tensor_sigma])
 
         # S = np.stack((Izz, Iyz, Ixz, Iyz, Iyy, Ixy, Ixz, Ixy, Ixx), axis=-1)
         S = np.stack((1-Ixx, -Ixy, -Ixz, -Ixy, 1-Iyy, -Iyz, -Ixz, -Iyz, 1-Izz), axis=-1)
@@ -179,7 +162,7 @@ def angles(S, cartesian=False):
     w,v = np.linalg.eigh(S)
     # TODO: maybe v should be a copy?
     v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue with all being > 0
-    # Remember that structure tensors are in x-y-z order so the first component is x, second is y, and third is z.
+    # Remember that structure tensors are in x-y-z order (i.e. col-row-slice instead of slice-row-col).
     if w.shape[-1] == 2:
         if cartesian:
             return v

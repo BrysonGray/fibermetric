@@ -367,12 +367,41 @@ def interp(x, I, phii, interp2d=False, **kwargs):
         phii = phii.flip(0).permute((1,2,0))[None]
     else:
         phii = phii.flip(0).permute((1,2,3,0))[None]
-    out = grid_sample(I[None], phii, align_corners=True, **kwargs)
+    out = grid_sample(I[None], phii, align_corners=False, **kwargs)
 
     # note align corners true means square voxels with points at their centers
     # post processing, get rid of batch dimension
     out = out[0]
     return out
+
+# def linear_interp(img, size):
+#     '''
+#     Linearly interpolate an image to a new size.
+
+#     Parameters
+#     ----------
+#     img : numpy array
+#         Image to be interpolated. Can be 2D or 3D.
+#     size : tuple
+#         New size of the image.
+    
+#     Returns
+#     -------
+#     out : numpy array
+#         Interpolated image.
+    
+#     '''
+
+#     old_size = img.shape
+#     x_old = [np.arange(n) for n in old_size]
+#     out = np.zeros(size)
+#     x_out = [np.arange(n) for n in size]
+
+#     # calculate interpolation ratios
+#     nearest_i = np.min([np.])
+
+
+
 
 
 dtypes_reverse = {
