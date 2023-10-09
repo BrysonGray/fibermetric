@@ -59,7 +59,8 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, normalize=True, 
 
     '''
     if I.ndim == 2:
-
+        # note the kernel size is 2*radius + 1 and the radius of the gaussian filter is round(truncate * sigma) where truncate defaults to 4.0.
+        # gaussian_filter has default border mode 'reflect'.
         Ix =  gaussian_filter(I, sigma=[derivative_sigma, derivative_sigma], order=(0,1))
         # Ix = correlate1d(I, np.array([-1,0,1])/2.0/dx, 1)
         # Ix = gaussian_filter(Ix, sigma=[derivative_sigma/dy, derivative_sigma/dx])

@@ -751,7 +751,7 @@ def anisotropy_correction(image, dI, labels=None, direction='up', blur=False):
             dim = np.argmin(dI)
         x = [np.arange(n)*d for n,d in zip(image.shape, dI)]
         Xout = np.stack(np.meshgrid(*[np.arange(n).astype(float) for n in (image.shape[dim],)*len(dI)], indexing='ij'), axis=-1)
-        image_out = scipy.interpolate.interpn(points=x, values=image, xi=Xout, method='linear', bounds_error=False, fill_value=None)
+        image = scipy.interpolate.interpn(points=x, values=image, xi=Xout, method='linear', bounds_error=False, fill_value=None)
 
         # TODO: remove
         # dsize = [image.shape[dim]]*len(image.shape)
@@ -776,9 +776,9 @@ def anisotropy_correction(image, dI, labels=None, direction='up', blur=False):
     xI = [(np.arange(n) - (n-1)/2)*d for n,d in zip(image.shape,dI)]
     extent = (xI[1][0]-dI[1]/2, xI[1][-1]+dI[1]/2, xI[0][-1]+dI[0]/2, xI[0][0]-dI[0]/2) # TODO: generalize for 3D case
     if blur is not False:
-        image_out = gaussian_filter(image_out, sigma=blur)
+        image = gaussian_filter(image, sigma=blur)
     
-    return image_out, labels_corrected, extent
+    return image, labels_corrected, extent
 
 
 def periodic_mean(points, period=180):
@@ -1000,7 +1000,7 @@ def make_phantom(x, angles, period=10, width=1.0, noise=1e-12, crop=None,\
     b = np.array([len(xi)//2 for xi in x])
     X = np.stack(np.meshgrid(*x, indexing='ij'), axis=-1)
     sigma = np.diag(d)*width
-    blur_factor = sigma[0,0] - sigma[1,1]
+    blur_factor = np.sqrt(sigma[0,0]**2 - sigma[1,1]**2)
 
     I = np.random.randn(*X.shape[:-1])*noise
     labels = None
@@ -1016,18 +1016,22 @@ def make_phantom(x, angles, period=10, width=1.0, noise=1e-12, crop=None,\
                                 ]).T
 
             # rotation matrix using Rodrigues' formula
-            axis = np.cross(direction,np.array([1.0,0.0,0.0]))
-            axis = axis / np.sum(axis**2)**0.5
-            alpha = np.arccos(np.dot(direction,np.array([1.0,0.0,0.0])))    
-            K = np.array([[0.0,-axis[2],axis[1]],
-                    [axis[2],0.0,-axis[0]],
-                    [-axis[1],axis[0],0.0]])
-            R = expm(alpha*K)
-            # covariance
-            sigma_ = R@sigma@R.T
+            if np.all(direction == [1.0,0.0,0.0]):
+                sigma_ = sigma
+                x_ = (X - b)[...,None]
+            else:
+                axis = np.cross(direction,np.array([1.0,0.0,0.0]))
+                axis = axis / np.sum(axis**2)**0.5
+                alpha = np.arccos(np.dot(direction,np.array([1.0,0.0,0.0])))    
+                K = np.array([[0.0,-axis[2],axis[1]],
+                        [axis[2],0.0,-axis[0]],
+                        [-axis[1],axis[0],0.0]])
+                R = expm(alpha*K)
+                # covariance
+                sigma_ = R@sigma@R.T
+                x_ = (R@(X-b)[...,None])
             sigma__ = sigma_[1:,1:]
             Z = 1.0/np.sqrt(2.0*np.pi**2)/np.linalg.det(sigma__)**0.5
-            x_ = (R@(X-b)[...,None])
             # note that the 0the component will not go into the gaussian
             x__ = x_[...,1:,:]
 
