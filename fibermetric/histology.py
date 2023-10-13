@@ -40,7 +40,7 @@ def load_img(impath, img_down=0, reverse_intensity=False):
     return I
 
 
-def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, normalize=True, masked=False):
+def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, normalize=True, masked=False, id_minus_S=False):
     '''
     Construct structure tensors from a grayscale image. Accepts 2D or 3D arrays
 
@@ -62,11 +62,7 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, normalize=True, 
         # note the kernel size is 2*radius + 1 and the radius of the gaussian filter is round(truncate * sigma) where truncate defaults to 4.0.
         # gaussian_filter has default border mode 'reflect'.
         Ix =  gaussian_filter(I, sigma=[derivative_sigma, derivative_sigma], order=(0,1))
-        # Ix = correlate1d(I, np.array([-1,0,1])/2.0/dx, 1)
-        # Ix = gaussian_filter(Ix, sigma=[derivative_sigma/dy, derivative_sigma/dx])
         Iy =  gaussian_filter(I, sigma=[derivative_sigma, derivative_sigma], order=(1,0))
-        # Iy = correlate1d(I, np.array([-1,0,1])/2.0/dy, 0)
-        # Iy = gaussian_filter(Iy, sigma=[derivative_sigma/dy, derivative_sigma/dx])
         norm = np.sqrt(Ix**2 + Iy**2) + np.finfo(float).eps
         if normalize:
             Ix = Ix / norm
@@ -87,14 +83,8 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, normalize=True, 
     elif I.ndim == 3:
 
         Ix =  gaussian_filter(I, sigma=[derivative_sigma, derivative_sigma, derivative_sigma], order=(0,0,1))
-        # Ix = correlate1d(I, np.array([-1,0,1])/2.0/dx, 2)
-        # Ix = gaussian_filter(Ix, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
         Iy =  gaussian_filter(I, sigma=[derivative_sigma, derivative_sigma, derivative_sigma], order=(0,1,0))
-        # Iy = correlate1d(I,np.array([-1,0,1])/2.0/dy,1)
-        # Iy = gaussian_filter(Iy, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
         Iz =  gaussian_filter(I, sigma=[derivative_sigma, derivative_sigma, derivative_sigma], order=(1,0,0))
-        # Iz = correlate1d(I, np.array([-1,0,1])/2.0/dz, 0)
-        # Iz = gaussian_filter(Iz, sigma=[derivative_sigma/dz, derivative_sigma/dy, derivative_sigma/dx])
 
         norm = np.sqrt(Ix**2 + Iy**2 + Iz**2) + np.finfo(float).eps
         if normalize:
@@ -109,9 +99,13 @@ def structure_tensor(I, derivative_sigma=1.0, tensor_sigma=1.0, normalize=True, 
         Ixz = gaussian_filter(Ix*Iz, sigma=[tensor_sigma, tensor_sigma, tensor_sigma])
         Iyz = gaussian_filter(Iy*Iz, sigma=[tensor_sigma, tensor_sigma, tensor_sigma])
 
-        # S = np.stack((Izz, Iyz, Ixz, Iyz, Iyy, Ixy, Ixz, Ixy, Ixx), axis=-1)
-        S = np.stack((1-Ixx, -Ixy, -Ixz, -Ixy, 1-Iyy, -Iyz, -Ixz, -Iyz, 1-Izz), axis=-1)
+        S = np.stack((Ixx, Ixy, Ixz, Ixy, Iyy, Iyz, Ixz, Iyz, Izz), axis=-1)
         S = S.reshape((S.shape[:-1]+(3,3)))
+        # 
+        if not id_minus_S:
+            S = -S # identity minus the structure tensor
+        else:
+            S = np.eye(3) - S
     else:
         raise Exception(f'Input must be a 2 or 3 dimensional array but found: {I.ndim}')
 
@@ -162,7 +156,7 @@ def angles(S, cartesian=False):
     """
     w,v = np.linalg.eigh(S)
     # TODO: maybe v should be a copy?
-    v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue with all being > 0
+    v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue.
     # Remember that structure tensors are in x-y-z order (i.e. col-row-slice instead of slice-row-col).
     if w.shape[-1] == 2:
         if cartesian:

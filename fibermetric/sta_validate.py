@@ -957,7 +957,7 @@ def make_phantom_v00(nI, period=10, width=1.0, noise=0.001, phantom_type='grid',
         return I
 
 
-def make_phantom(x, angles, period=10, width=1.0, noise=1e-12, crop=None,\
+def make_phantom(x, angles, period=10, width=1.0, noise=1e-6, crop=None,\
                  blur_correction=False, display=False, return_labels=False, interp=True):
     """
     Parameters
