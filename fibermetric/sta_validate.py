@@ -988,7 +988,6 @@ def make_phantom(x, angles, period=10, width=1.0, noise=1e-6, crop=None,\
     interp : bool
         If True, interpolate the image to the largest dimension.
 
-    
     Returns
     -------
     phantom : ndarray of shape nI
@@ -999,13 +998,13 @@ def make_phantom(x, angles, period=10, width=1.0, noise=1e-6, crop=None,\
     d = np.array([xi[1] - xi[0] for xi in x])
     b = np.array([len(xi)//2 for xi in x])
     X = np.stack(np.meshgrid(*x, indexing='ij'), axis=-1)
-    sigma = np.diag(d)*width
-    blur_factor = np.sqrt(sigma[0,0]**2 - sigma[1,1]**2)
+    blur_factor = np.sqrt(d[0]**2 - d[1]**2)
 
     I = np.random.randn(*X.shape[:-1])*noise
     labels = None
 
     if len(x) == 3:
+        sigma = (np.diag(d)*width)**2 # sigma is the covariance matrix
         if return_labels:
             labels = np.zeros(X.shape[:-1]+(2,))
         blur = (0., blur_factor, blur_factor)
@@ -1039,7 +1038,7 @@ def make_phantom(x, angles, period=10, width=1.0, noise=1e-6, crop=None,\
             if period is not None:
                 x__ = ((x__+period/2)%period) - period/2
                 
-            tmp = np.linalg.inv(sigma__)@x__    
+            tmp = np.linalg.inv(sigma__)@x__
             tmp = x__.swapaxes(-1,-2)@tmp
             I_ = Z*np.exp(-0.5*tmp[...,0,0])
 
@@ -1097,7 +1096,7 @@ def make_phantom(x, angles, period=10, width=1.0, noise=1e-6, crop=None,\
             labels = np.zeros(X.shape[:-1])
         blur = (0., blur_factor)
         for angle in angles:
-            sigma = (np.sin(angle)*d[0]*width)**2 + (np.cos(angle)*d[1]*width)**2
+            sigma = (np.sin(angle)*d[0]*width)**2 + (np.cos(angle)*d[1]*width)**2 # variance (not standard deviation)
             x__ = (X - b)@np.array([-np.sin(angle), np.cos(angle)])
             if period is not None:
                 x__ = ((x__+period/2)%period) - period/2
