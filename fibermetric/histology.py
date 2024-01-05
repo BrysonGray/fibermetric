@@ -23,7 +23,6 @@ from dipy.reconst.shm import sh_to_sf_matrix
 from utils import interp, read_matrix_data
 
 
-
 def load_img(impath, img_down=0, reverse_intensity=False):
     imname = os.path.split(impath)[1]
     print(f'loading image {imname}...')
@@ -155,7 +154,6 @@ def angles(S, cartesian=False):
         Array of values between -pi/2 and pi/2.
     """
     w,v = np.linalg.eigh(S)
-    # TODO: maybe v should be a copy?
     v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue.
     # Remember that structure tensors are in x-y-z order (i.e. col-row-slice instead of slice-row-col).
     if w.shape[-1] == 2:

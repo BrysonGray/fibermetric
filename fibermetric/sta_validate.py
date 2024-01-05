@@ -20,7 +20,6 @@ from scipy.linalg import expm
 from tqdm.contrib import itertools as tqdm_itertools
 
 from periodic_kmeans.periodic_kmeans import PeriodicKMeans
-# from fibermetric import histology, apsym_kmeans
 import histology
 import apsym_kmeans
 
@@ -958,7 +957,8 @@ def make_phantom_v00(nI, period=10, width=1.0, noise=0.001, phantom_type='grid',
 
 
 def make_phantom(x, angles, period=10, width=1.0, noise=1e-6, crop=None,\
-                 blur_correction=False, display=False, return_labels=False, interp=True):
+                 blur_correction=False, display=False, return_labels=False,\
+                    interp=True, inverse=False):
     """
     Parameters
     ----------
@@ -1045,8 +1045,11 @@ def make_phantom(x, angles, period=10, width=1.0, noise=1e-6, crop=None,\
             if return_labels:
                 line_thresh = Z*np.exp(-2) # one standard deviation
                 labels += np.where(I_[...,None] > line_thresh, angle, [0.0,0.0])
-
+            
             I += I_
+        if inverse:
+            alpha = 10
+            I = np.exp(-alpha*I)
         # TODO: fix problem with labels calculation
         if return_labels:
             labels = np.where(np.any(np.all(labels == np.array(angles)[None,None,None], axis=-1), axis=-1), labels, [0.0,0.0])
@@ -1107,6 +1110,11 @@ def make_phantom(x, angles, period=10, width=1.0, noise=1e-6, crop=None,\
                 line_thresh = Z*np.exp(-0.5) # one standard deviation
                 labels += np.where(I_ > line_thresh, angle, 0.0)
             I += I_
+
+        if inverse:
+            alpha = 10
+            I = np.exp(-alpha*I)
+            
         if return_labels:
             labels = np.where(np.any(labels[...,None] == np.array(angles)[None,None], axis=2), labels, 0.0)
 
@@ -1238,10 +1246,8 @@ def sta_test(I, derivative_sigma, tensor_sigma, err_type='piecewise', true_theta
                         argmin = np.array(np.unravel_index(np.argmin(diff_), (2,2,2))) # the closest mu value and orientation is the first error
                         remaining_idx = 1 - argmin # the second error is the best error from the other mu value compared to the other ground truth angle
                         diff[i,j] = np.mean([diff_[tuple(argmin)], np.min(diff_,1)[remaining_idx[0],remaining_idx[2]]]) * 180/np.pi
-            mean_err = np.mean(diff)
-            std = np.std(diff)
-            median_err = np.median(diff)
-            mad = np.median(np.abs(diff - median_err))
+
+            error = np.mean(diff)
 
         if display:
             fig, ax = plt.subplots(1,2, figsize=(6,4))
@@ -1305,10 +1311,7 @@ def sta_test(I, derivative_sigma, tensor_sigma, err_type='piecewise', true_theta
                         corrolary = tuple([1 - x for x in argmax]) # the corresponding cos_dif of the other mu to the other grid_theta
                         diff[i,j,k] = np.mean([diff_[argmax], diff_[corrolary]]) * 180/np.pi
 
-        mean_err = np.mean(diff)
-        std = np.std(diff)
-        median_err = np.median(diff)
-        mad = np.median(np.abs(diff - median_err))
+        error = np.mean(diff)
 
 
         if display:
@@ -1334,9 +1337,9 @@ def sta_test(I, derivative_sigma, tensor_sigma, err_type='piecewise', true_theta
                 print(f'error = {diff[0,0,0]} degrees')
 
     if return_all:
-        return mean_err, std, median_err, mad, mu_, angles, diff
+        return error, mu_, angles, diff
     else:
-        return mean_err, std, median_err, mad
+        return error
 
 # TODO: remove phantom test in next version
 def phantom_test(derivative_sigma, tensor_sigma, phantom=None, nI=(64,64), period=10, width=1.0, noise=0.001,\

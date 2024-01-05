@@ -61,7 +61,7 @@ def _apsym_lloyd_iter(X, centers, update_centers=True):
         cosine_dist = cosine_dist[:,None]
     else:
         labels = np.argmin(dist, axis=-1).astype(np.int32)
-    flip_ids = np.asarray(cosine_dist[range(len(labels)),labels] < 0).nonzero()
+    flip_ids = np.asarray(cosine_dist[range(len(labels)),labels] < 0).nonzero() # the indices of the directions whose cosine distance to their assigned center is negative
     Xnew = X.copy()
     Xnew[flip_ids] *= -1
     if update_centers:
@@ -219,8 +219,6 @@ def _kmeans_single_lloyd(
 
 class APSymKMeans():
     """K-Means clustering.
-
-    Read more in the :ref:`User Guide <k_means>`.
 
     Parameters
     ----------

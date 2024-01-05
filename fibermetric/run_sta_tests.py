@@ -47,17 +47,16 @@ def main(path, out):
             continue
 
         error_df = pd.DataFrame({'derivative_sigma':[], 'tensor_sigma':[], 'AI':[], 'period':[],
-                                'width':[], 'angles':[], 'mean_err':[], 'std':[], 'median_err':[], 'MAD':[]})
+                                'width':[], 'angles':[], 'error':[]})
 
         for sigma0 in derivative_sigmas:
             for sigma1 in tensor_sigmas:
                 crop_all = round(max(sigma0,sigma1)*8/3) # two-thirds the radius of the largest kernel
                 crop_end = round(float(AI)) - 1
-                mean_err, std, median_err, mad = sta_validate.sta_test(phantom, sigma0, sigma1, true_thetas=angle, crop=crop_all, crop_end=crop_end)
+                error = sta_validate.sta_test(phantom, sigma0, sigma1, true_thetas=angle, crop=crop_all, crop_end=crop_end)
                 new_row = {'derivative_sigma': sigma0, 'tensor_sigma': sigma1,
                             'AI': AI, 'period': period, 'width': 1,
-                            'angles': [angle], 'mean_err': mean_err,
-                            'std': std, 'median_err': median_err, 'MAD': mad
+                            'angles': [angle], 'error': error
                         }
                 error_df = pd.concat((error_df, pd.DataFrame(new_row)), ignore_index=True)
 
