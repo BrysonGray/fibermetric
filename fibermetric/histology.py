@@ -199,15 +199,7 @@ def hsv(S, I):
 
     # print('calculating orientations and anisotropy...')
     w,v = np.linalg.eigh(S)
-
-    # get only principle eigenvectors
-    # max_idx = np.abs(d).argmax(axis=-1)
-    # max_idx = np.ravel(max_idx)
-    # max_idx = np.array([np.arange(max_idx.shape[0]), max_idx])
-    # v = np.moveaxis(v, -1,-2).reshape(-1,2,2)
-    # v = v[max_idx[0],max_idx[1]].reshape(S.shape[0],-1,2)
     v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue with all being > 0
-    # theta = ((np.arctan(v[...,0] / v[...,1])) + np.pi / 2) / np.pi
     theta = ((np.arctan(v[...,1] / v[...,0])) + np.pi / 2) / np.pi # TODO: verify this is correct since changing S component order. 
     # row/col gives the counterclockwise angle from left/right direction. Rescaled [-pi/2,pi/2] -> [0,1]
     AI = anisotropy(w) # anisotropy index (AI)

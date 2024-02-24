@@ -16,7 +16,6 @@ import tqdm
 derivative_sigmas = np.linspace(start=0.15, stop=2.5, num=10)
 tensor_sigmas = np.linspace(start=0.0, stop=5.0, num=10)
 
-    
 def main(path, out):
     if os.path.isdir(path):
         files = [os.path.join(path, f) for f in os.listdir(path)]

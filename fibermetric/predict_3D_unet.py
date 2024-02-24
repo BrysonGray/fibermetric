@@ -182,6 +182,7 @@ def test_loop(model, loss_fn, test_loader, device):
             test_loss += loss_fn(pred, y).item()
             print('Loss: ', loss_fn(pred, y).item())
             accuracy.append(torch.mean(torch.abs(pred-y)).item())
+            # errors = torch.abs(pred-y).item()
 
     test_loss /= num_batches
     accuracy = np.mean(accuracy)
