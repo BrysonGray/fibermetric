@@ -322,6 +322,7 @@ def sta_test(I, derivative_sigma, tensor_sigma, err_type='piecewise', true_theta
         is optionally divided into image patches with size specified by argument patch_size.
     
     true_thetas : sequence of float or tuple
+        Angle(s) in radians.
 
     patch_size : int, or {list, tuple} of length I.ndim, optional
         The side length of each patch
@@ -454,7 +455,7 @@ def sta_test(I, derivative_sigma, tensor_sigma, err_type='piecewise', true_theta
                     if true_thetas.ndim == 1:
                         skm.fit(angles_[i,j,k])
                         mu_ = skm.cluster_centers_
-                        diff[i,j,k] = np.arccos(np.abs(mu_.dot(true_thetas))) * 180/np.pi 
+                        diff[i,j,k] = np.arccos(np.abs(mu_.dot(true_thetas))) * 180/np.pi
                     else:
                         skm.fit(angles_[i,j,k])
                         mu_ = skm.cluster_centers_ # shape (n_clusters, n_features)
