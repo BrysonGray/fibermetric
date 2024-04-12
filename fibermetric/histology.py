@@ -21,6 +21,7 @@ from dipy.core.sphere import disperse_charges, Sphere, HemiSphere
 from dipy.reconst.shm import sh_to_sf_matrix
 # from fibermetric.utils import interp, read_matrix_data
 from utils import interp, read_matrix_data
+import apsym_kmeans
 from periodic_kmeans.periodic_kmeans import PeriodicKMeans
 
 
@@ -255,7 +256,15 @@ def project_to_plane(vectors, normal, L=None):
     return vectors_p
 
 
-def plot_angles(angles, image=None, means=None, ntheta=500, axis=False, axes_coords=[0.1, 0.1, 0.8, 0.8], fig=None, show=True, title=None):
+def angle_to_rgb(angle, brightness=1):
+    r = np.abs(brightness * np.sin(angle))
+    g = np.abs(brightness * np.sin(angle + 2*np.pi / 3.))
+    b = np.abs(brightness * np.sin(angle + 4*np.pi/ 3.))
+
+    return [r,g,b]
+
+
+def plot_angles(angles, image=None, means=None, ntheta=500, axis=False, axes_coords=[0.1, 0.1, 0.8, 0.8], fig=None, show=True, title=None, xlabel=None, ylabel=None, colors=None):
     """Plot angles as a polar histogram. This function currently only supports polar (1D) angles.
 
     Parameters
@@ -291,35 +300,49 @@ def plot_angles(angles, image=None, means=None, ntheta=500, axis=False, axes_coo
     if image is not None:
         ax_image = fig.add_axes(axes_coords)
         ax_image.imshow(image, cmap='gray', alpha=1)
-        ax_image.axis('off')  # don't show the axes ticks/lines/etc. associated with the image
+        # ax_image.axis('off')  # don't show the axes ticks/lines/etc. associated with the image
+        plt.gca().set_yticklabels([])
+        plt.gca().set_xticklabels([])
+        plt.gca().set_xticks([])
+        plt.gca().set_yticks([])
         if title is not None:
             ax_image.set_title(title)
+        if xlabel is not None:
+            ax_image.set_xlabel(xlabel, fontsize=16)
+        if ylabel is not None:
+            ax_image.set_ylabel(ylabel, fontsize=16)
 
-    if means is not None:
-        ax_means = fig.add_axes(axes_coords)
-        L = 100 # number of line points
-        x = np.arange(L)
-        m = [1/np.tan(x) for x in means] # tan(x) = opp/adj where opp is +x, and adj is +y, to transform into slope (y/x) do 1/tan(x)
-        b = [(1 - x)*L/2 for x in m]
-        for i in range(len(m)):
-            if np.abs(m[i]) > np.pi/4:
-                b = (1 - 1/m[i])*L/2
-                ax_means.plot(1/m[i]*x + b, x, linewidth=2)
-            else:
-                b = (1 - m[i])*L/2
-                ax_means.plot(x, m[i]*x+b, linewidth=2)
-        ax_means.set_ylim([L,0]) # set +y to point down
-        ax_means.set_xlim([0,L])
-        ax_means.axis('off')
-
-    ax_polar = fig.add_axes(axes_coords, projection = 'polar')
+    polar_coords = np.array(axes_coords) + np.array([0.05, 0.05, -0.1, -0.1])
+    ax_polar = fig.add_axes(polar_coords, projection = 'polar')
     ax_polar.patch.set_alpha(0)
-    ax_polar.plot(t, xfinv, 'm', linewidth=3)
+    ax_polar.plot(t, xfinv, 'royalblue', linewidth=5)
     ax_polar.set_theta_offset(-np.pi/2)
     ax_polar.set_yticklabels([])
     ax_polar.grid(False)
     if not axis:
         ax_polar.axis('off')
+
+    if means is not None:
+        if means.shape==():
+            means = [means]
+        ax_means = fig.add_axes(axes_coords)
+
+        for i,m in enumerate(means):
+            if colors is None:
+                color='lime'
+            elif isinstance(colors[i], (int, float)): # if color is a scalar, treat it as an angle and convert to rgb
+                color = angle_to_rgb(colors[i])
+            elif isinstance(colors[i], (np.ndarray, list, tuple)): # if color is a sequence, treat it as an rgb value.
+                color = np.abs(colors[i])
+                if len(color) != 3:
+                    raise ValueError("The colors must be either scalars or sequences of length 3.")
+                
+            if isinstance(m, (int, float)):
+                m = [np.sin(m), np.cos(m)]
+            ax_means.quiver(0, 0, m[0], -m[1], scale_units='width', scale=3, width=0.01, color=color)
+            ax_means.quiver(0, 0, -m[0], m[1], scale_units='width', scale=3, width=0.01, color=color)
+        ax_means.axis('off')
+
 
     if show:
         plt.show()
@@ -331,7 +354,73 @@ def vec_to_theta(vec):
     return np.arctan(vec[...,0] / (vec[...,1] + np.finfo(float).eps))
 
 
-def plot_angles_3d(vectors, image=None, means=None, mip=False):
+def periodic_mean(points, period=180):
+    period_2 = period/2
+    if max(points) - min(points) > period_2:
+        _points = np.array([0 if x > period_2 else 1 for x in points]).reshape(-1,1)
+        n_left =_points.sum()
+        n_right = len(points) - n_left
+        if n_left >0:
+            mean_left = (points * _points).sum()/n_left
+        else:
+            mean_left =0
+        if n_right >0:
+            mean_right = (points * (1-_points)).sum() / n_right
+        else:
+            mean_right = 0
+        _mean = (mean_left*n_left+mean_right*n_right+n_left*period)/(n_left+n_right)
+        return _mean % period
+    else:
+        return points.mean(axis=0)
+
+
+def spherical_kmeans(vectors, n_clusters, cartesian=True):
+    """ Compute antipodally symetric spherical k-means.
+
+    Parameters
+    ----------
+    angles : array_like
+        An array of shape (N,3), where N is the number of sample directions and the last dimension is vector components in cartesian coordinates.
+    n_clusters : int
+        Number of means (k) for k-means.
+
+    Returns
+    -------
+    means : ndarray of shape (n_clusters, 3)
+    
+    """
+    skm = apsym_kmeans.APSymKMeans(n_clusters=n_clusters)
+    skm.fit(vectors)
+    means = skm.cluster_centers_
+
+    if not cartesian: # then return means in spherical coordinates (theta (polar angle), phi (azimuthal angle))
+        x = means[...,0]
+        y = means[...,1]
+        z = means[...,2]
+        theta = np.arctan(np.sqrt(x**2 + y**2) / (z + np.finfo(float).eps)) # range is (-pi/2,pi/2)
+        theta = np.where(theta < 0, theta + np.pi, theta) # range is (0,pi)
+        phi = np.arctan(x / (y + np.finfo(float).eps)) # range (-pi/2, pi/2)
+        return np.stack((theta,phi), axis=-1)
+
+    return means
+
+def circular_kmeans(angles, n_clusters):
+
+    angles = angles.flatten()
+    angles = angles[~np.isnan(angles)]
+    angles = np.where(angles < 0, angles + np.pi, angles) # flip angles to be in the range [0,pi] for periodic kmeans
+    if n_clusters==1:
+        means = periodic_mean(angles[...,None], period=np.pi)
+    elif n_clusters > 1:
+        periodic_kmeans = PeriodicKMeans(angles[...,None], period=np.pi, no_of_clusters=n_clusters)
+        _, _, centers = periodic_kmeans.clustering()
+        means = np.array(centers).squeeze()
+    else:
+        raise ValueError(f'n_clusters must be greater than or equal to 1, but got {n_clusters}')
+    
+    return means
+
+def plot_angles_3d(vectors, image=None, plot_means=True, n_clusters=2, mip=False):
     """Plot 3D vector orientations as a histogram in orthogonal views with the optional original image and vector means.
 
     Parameters
@@ -340,8 +429,7 @@ def plot_angles_3d(vectors, image=None, means=None, mip=False):
         The sequence of angles as three-dimensional vectors with components along the last axis.
     image : array_like, optional
         3D grayscale image volume array.
-    means : sequence of floats, optional
-        The mean or means of angles outputted from k-means clustering.
+    plot_means : bool, defaults to False.
 
     """
     vectors = vectors.reshape(-1,3)
@@ -367,37 +455,55 @@ def plot_angles_3d(vectors, image=None, means=None, mip=False):
         I_ortho = [image[image.shape[0]//2],
                    image[:, image.shape[1]//2],
                    image[:, :, image.shape[2]//2]]
-    
-    # if means:
-    #     mu = []
-    #     for i in range(3):
-    #         thetas = angles_2d[i][::10] # downsample to reduce computation time
-    #         thetas = np.where(thetas < 0, thetas + np.pi, thetas) # flip angles to be in the range [0,pi] for periodic kmeans
-    #         periodic_kmeans = PeriodicKMeans(thetas[...,None], period=np.pi, no_of_clusters=2)
-    #         _, _, centers = periodic_kmeans.clustering()
-    #         mu.append(np.array(centers).squeeze())
 
-    if means is not None:
-        means_ortho = []
-        for i in range(len(means)):
-            means_ortho.append([means[i,:2], [means[i,0],means[i,2]], means[i,1:]])
-        means_ortho = np.array(means_ortho)
-        means_new = []
-        for i in range(len(means)):
-            for j in range(3):
-                means_new.append(vec_to_theta(means_ortho[i,j])) # TODO
+    if plot_means:
+        # compute 3D spherical k-means of vectors
+        mu = spherical_kmeans(vectors, n_clusters=n_clusters) # shape (n_clusters, 3)
+        # project into orthogonal planes. Resulting shape is (3, n_clusters, 2)
+        mu_2d = []
+        for m in mu: # for each mean append the (3,2) array representing one 2d vector per orthogonal plane
+            mu_2d.append([[m[0], m[1]],
+                          [m[0], m[2]],
+                          [m[1], m[2]]])
+        mu_2d = np.array(mu_2d) # shape (n_clusters, 3, 2)
+        mu_2d = np.transpose(mu_2d, (1,0,2)) # shape (3, n_clusters, 2)
 
-        means = [vec_to_theta(means_ortho[0,i]), vec_to_theta(means_ortho[1,i])]
+    # if means is not None:
+    #     means_ortho = []
+    #     for i in range(len(means)):
+    #         means_ortho.append([means[i,:2], [means[i,0],means[i,2]], means[i,1:]])
+    #     means_ortho = np.array(means_ortho)
+    #     means_new = []
+    #     for i in range(len(means)):
+    #         for j in range(3):
+    #             means_new.append(vec_to_theta(means_ortho[i,j])) # TODO
+
+    #     means = [vec_to_theta(means_ortho[0,i]), vec_to_theta(means_ortho[1,i])]
         
+    # mu_ = None
+    # if means:
+    #     # nclusters can be a list designating nclusters for each orthogonal slice separately
+    #     if hasattr(nclusters, '__len__'):
+    #         nclusters_ = nclusters[i]
+    #     else:
+    #         nclusters_ = nclusters
+    #     angles = angles_2d[i]
+    #     angles = np.where(angles < 0, angles + np.pi, angles)
+    #     periodic_kmeans = PeriodicKMeans(angles[...,None], period=np.pi, no_of_clusters=nclusters_)
+    #     _, _, centers = periodic_kmeans.clustering()
+    #     mu_ = np.array(centers).squeeze()
+
     fig = plt.figure()
 
-    axes_coords_list = [[0.1, 0.1, 0.8, 0.8],
+    axes_coords_list = [[0.1, 0.1, 0.8, 0.8], # x0, y0, ∆x, ∆y
                         [1.0, 0.1, 0.8, 0.8],
                         [2.0, 0.1, 0.8, 0.8]]
-    titles = ["x-y", "x-z", "y-z"]
+    # titles = ["x-y", "x-z", "y-z"]
+    xlabels = ["X", "X", "Y"]
+    ylabels = ["Y", "Z", "Z"]
     for i in range(3):
         # plot_angles(angles=angles_2d[i], image=I_ortho[i], means=mu[i], axes_coords=axes_coords_list[i], fig=fig, show=False, title=titles[i])
-        plot_angles(angles=angles_2d[i], image=I_ortho[i], means=means, axes_coords=axes_coords_list[i], fig=fig, show=False, title=titles[i])
+        plot_angles(angles=angles_2d[i], image=I_ortho[i], means=mu_2d[i], axes_coords=axes_coords_list[i], fig=fig, show=False, title=None, xlabel=xlabels[i], ylabel=ylabels[i], colors=np.abs(mu))
 
 
     plt.show()

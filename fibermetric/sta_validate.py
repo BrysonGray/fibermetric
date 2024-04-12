@@ -45,26 +45,6 @@ def anisotropy_correction(image, dI, labels=None, direction='up', blur=False):
         image = gaussian_filter(image, sigma=blur)
     
     return image, labels_corrected, extent
-
-
-def periodic_mean(points, period=180):
-    period_2 = period/2
-    if max(points) - min(points) > period_2:
-        _points = np.array([0 if x > period_2 else 1 for x in points]).reshape(-1,1)
-        n_left =_points.sum()
-        n_right = len(points) - n_left
-        if n_left >0:
-            mean_left = (points * _points).sum()/n_left
-        else:
-            mean_left =0
-        if n_right >0:
-            mean_right = (points * (1-_points)).sum() / n_right
-        else:
-            mean_right = 0
-        _mean = (mean_left*n_left+mean_right*n_right+n_left*period)/(n_left+n_right)
-        return _mean % period
-    else:
-        return points.mean(axis=0)
     
 
 def gather(I, patch_size=None):
@@ -388,7 +368,7 @@ def sta_test(I, derivative_sigma, tensor_sigma, err_type='piecewise', true_theta
                     angles_tile = angles_[i,j][~np.isnan(angles_[i,j])]
                     angles_tile = np.where(angles_tile < 0, angles_tile + np.pi, angles_tile) # flip angles to be in the range [0,pi] for periodic kmeans
                     if true_thetas.ndim == 0:
-                        mu_ = periodic_mean(angles_tile.flatten()[...,None], period=np.pi)
+                        mu_ = histology.periodic_mean(angles_tile.flatten()[...,None], period=np.pi)
                     elif true_thetas.ndim == 1:
                         periodic_kmeans = PeriodicKMeans(angles_tile[...,None], period=np.pi, no_of_clusters=2)
                         _, _, centers = periodic_kmeans.clustering()
