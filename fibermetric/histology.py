@@ -264,7 +264,7 @@ def angle_to_rgb(angle, brightness=1):
     return [r,g,b]
 
 
-def plot_angles(angles, image=None, means=None, ntheta=500, axis=False, axes_coords=[0.1, 0.1, 0.8, 0.8], fig=None, show=True, title=None, xlabel=None, ylabel=None, colors=None):
+def plot_angles(image, angles=None, means=None, ntheta=500, axis=False, axes_coords=[0.1, 0.1, 0.8, 0.8], fig=None, show=True, title=None, xlabel=None, ylabel=None, colors=None):
     """Plot angles as a polar histogram. This function currently only supports polar (1D) angles.
 
     Parameters
@@ -280,47 +280,50 @@ def plot_angles(angles, image=None, means=None, ntheta=500, axis=False, axes_coo
         axes : bool
             Show polar axis. Default is False
     """
-    angles_flat = angles.flatten()
-    angles_ = np.where(angles_flat<0, angles_flat+np.pi, angles_flat-np.pi)
-    angles_sym = np.concatenate((angles_flat, angles_), axis=0)
-
-    t = np.arange(ntheta+1)*(2*np.pi/ntheta) - np.pi
-    x, _ = np.histogram(angles_sym, t)
-
-    xf = np.fft.rfft(x)
-    n = np.arange(len(xf))
-    xf = xf * np.exp(-0.1*n)
-    xfinv = np.fft.irfft(xf,ntheta+1)
-    xfinv = xfinv / np.sum(xfinv)
 
     # plot
     if fig is None:
         fig = plt.figure()
 
-    if image is not None:
-        ax_image = fig.add_axes(axes_coords)
-        ax_image.imshow(image, cmap='gray', alpha=1)
-        # ax_image.axis('off')  # don't show the axes ticks/lines/etc. associated with the image
-        plt.gca().set_yticklabels([])
-        plt.gca().set_xticklabels([])
-        plt.gca().set_xticks([])
-        plt.gca().set_yticks([])
-        if title is not None:
-            ax_image.set_title(title)
-        if xlabel is not None:
-            ax_image.set_xlabel(xlabel, fontsize=16)
-        if ylabel is not None:
-            ax_image.set_ylabel(ylabel, fontsize=16)
+    ax_image = fig.add_axes(axes_coords)
+    ax_image.imshow(image, cmap='gray', alpha=1)
+    # ax_image.axis('off')  # don't show the axes ticks/lines/etc. associated with the image
+    plt.gca().set_yticklabels([])
+    plt.gca().set_xticklabels([])
+    plt.gca().set_xticks([])
+    plt.gca().set_yticks([])
+    if title is not None:
+        ax_image.set_title(title)
+    if xlabel is not None:
+        ax_image.set_xlabel(xlabel, fontsize=24)
+    if ylabel is not None:
+        ax_image.set_ylabel(ylabel, fontsize=24)
 
-    polar_coords = np.array(axes_coords) + np.array([0.05, 0.05, -0.1, -0.1])
-    ax_polar = fig.add_axes(polar_coords, projection = 'polar')
-    ax_polar.patch.set_alpha(0)
-    ax_polar.plot(t, xfinv, 'royalblue', linewidth=5)
-    ax_polar.set_theta_offset(-np.pi/2)
-    ax_polar.set_yticklabels([])
-    ax_polar.grid(False)
-    if not axis:
-        ax_polar.axis('off')
+    
+    if angles is not None:
+        angles_flat = angles.flatten()
+        angles_ = np.where(angles_flat<0, angles_flat+np.pi, angles_flat-np.pi)
+        angles_sym = np.concatenate((angles_flat, angles_), axis=0)
+
+        t = np.arange(ntheta+1)*(2*np.pi/ntheta) - np.pi
+        x, _ = np.histogram(angles_sym, t)
+
+        xf = np.fft.rfft(x)
+        n = np.arange(len(xf))
+        xf = xf * np.exp(-0.1*n)
+        xfinv = np.fft.irfft(xf,ntheta+1)
+        xfinv = xfinv / np.sum(xfinv)
+
+        polar_coords = np.array(axes_coords) + np.array([0.05, 0.05, -0.1, -0.1])
+        ax_polar = fig.add_axes(polar_coords, projection = 'polar')
+        ax_polar.patch.set_alpha(0)
+        ax_polar.plot(t, xfinv, 'royalblue', linewidth=8)
+        ax_polar.set_theta_offset(-np.pi/2)
+        ax_polar.set_yticklabels([])
+        ax_polar.grid(False)
+        if not axis:
+            ax_polar.axis('off')
+
 
     if means is not None:
         if means.shape==():
@@ -339,8 +342,8 @@ def plot_angles(angles, image=None, means=None, ntheta=500, axis=False, axes_coo
                 
             if isinstance(m, (int, float)):
                 m = [np.sin(m), np.cos(m)]
-            ax_means.quiver(0, 0, m[0], -m[1], scale_units='width', scale=3, width=0.01, color=color)
-            ax_means.quiver(0, 0, -m[0], m[1], scale_units='width', scale=3, width=0.01, color=color)
+            ax_means.quiver(0, 0, m[0], -m[1], scale_units='width', scale=3, width=0.02, color=color)
+            ax_means.quiver(0, 0, -m[0], m[1], scale_units='width', scale=3, width=0.02, color=color)
         ax_means.axis('off')
 
 
@@ -420,33 +423,19 @@ def circular_kmeans(angles, n_clusters):
     
     return means
 
-def plot_angles_3d(vectors, image=None, plot_means=True, n_clusters=2, mip=False):
+def plot_angles_3d(image, vectors=None, plot_means=True, n_clusters=2, mip=False, true_means=None, plot_true_means=True):
     """Plot 3D vector orientations as a histogram in orthogonal views with the optional original image and vector means.
+    TODO: Too many options. Needs to be simplified.
 
     Parameters
     ----------
     vectors : array_like
         The sequence of angles as three-dimensional vectors with components along the last axis.
-    image : array_like, optional
+    image : array_like
         3D grayscale image volume array.
     plot_means : bool, defaults to False.
 
     """
-    vectors = vectors.reshape(-1,3)
-    # vectors are in x-y-z (col-row-slice) order so they must be reordered
-    x = vectors[...,0]
-    y = vectors[...,1]
-    z = vectors[...,2]
-    vec_2d = [
-              np.stack((x, y), axis=-1), # xy
-              np.stack((x, z), axis=-1), # xz
-              np.stack((y, z), axis=-1), # yz
-              ]
-
-    angles_2d = []
-    for i in range(3):
-        angles_2d.append(vec_to_theta(vec_2d[i]))
-    
     if mip:
         I_ortho = [image.max(axis=0),
                    image.max(axis=1),
@@ -455,43 +444,57 @@ def plot_angles_3d(vectors, image=None, plot_means=True, n_clusters=2, mip=False
         I_ortho = [image[image.shape[0]//2],
                    image[:, image.shape[1]//2],
                    image[:, :, image.shape[2]//2]]
+        
+    if vectors is not None:
+        vectors = vectors.reshape(-1,3)
+        # vectors are in x-y-z (col-row-slice) order so they must be reordered
+        x = vectors[...,0]
+        y = vectors[...,1]
+        z = vectors[...,2]
+        vec_2d = [
+                np.stack((x, y), axis=-1), # xy
+                np.stack((x, z), axis=-1), # xz
+                np.stack((y, z), axis=-1), # yz
+                ]
 
+        angles_2d = []
+        for i in range(3):
+            angles_2d.append(vec_to_theta(vec_2d[i]))
+    
+    mu_2d = []
+    colors = []
     if plot_means:
         # compute 3D spherical k-means of vectors
         mu = spherical_kmeans(vectors, n_clusters=n_clusters) # shape (n_clusters, 3)
         # project into orthogonal planes. Resulting shape is (3, n_clusters, 2)
-        mu_2d = []
         for m in mu: # for each mean append the (3,2) array representing one 2d vector per orthogonal plane
             mu_2d.append([[m[0], m[1]],
                           [m[0], m[2]],
                           [m[1], m[2]]])
+        colors.append(np.abs(mu))
+    
+    if true_means is not None:
+        if plot_true_means:
+            for m in true_means: # for each mean append the (3,2) array representing one 2d vector per orthogonal plane
+                mu_2d.append([[m[0], m[1]],
+                            [m[0], m[2]],
+                            [m[1], m[2]]])
+            colors.append(np.abs(true_means))
+
+        if plot_means: # print error
+            diff = np.empty((len(mu),len(true_means))) # shape (2,2) for two permutations of the difference between two means and two true_thetas
+            for m in range(len(mu)):
+                for n in range(len(true_means)):
+                    diff[m,n] = np.arccos(np.abs(mu[m].dot(true_means[n])))
+            argmax = np.unravel_index(np.argmin(diff), (2,2))
+            corrolary = tuple([1 - x for x in argmax]) # the corresponding cos_dif of the other mu to the other grid_theta
+            error = np.mean([diff[argmax], diff[corrolary]]) * 180/np.pi
+            print(f'mean error (degrees): {error}')
+
+    if plot_means or plot_true_means:
         mu_2d = np.array(mu_2d) # shape (n_clusters, 3, 2)
         mu_2d = np.transpose(mu_2d, (1,0,2)) # shape (3, n_clusters, 2)
-
-    # if means is not None:
-    #     means_ortho = []
-    #     for i in range(len(means)):
-    #         means_ortho.append([means[i,:2], [means[i,0],means[i,2]], means[i,1:]])
-    #     means_ortho = np.array(means_ortho)
-    #     means_new = []
-    #     for i in range(len(means)):
-    #         for j in range(3):
-    #             means_new.append(vec_to_theta(means_ortho[i,j])) # TODO
-
-    #     means = [vec_to_theta(means_ortho[0,i]), vec_to_theta(means_ortho[1,i])]
-        
-    # mu_ = None
-    # if means:
-    #     # nclusters can be a list designating nclusters for each orthogonal slice separately
-    #     if hasattr(nclusters, '__len__'):
-    #         nclusters_ = nclusters[i]
-    #     else:
-    #         nclusters_ = nclusters
-    #     angles = angles_2d[i]
-    #     angles = np.where(angles < 0, angles + np.pi, angles)
-    #     periodic_kmeans = PeriodicKMeans(angles[...,None], period=np.pi, no_of_clusters=nclusters_)
-    #     _, _, centers = periodic_kmeans.clustering()
-    #     mu_ = np.array(centers).squeeze()
+        colors = np.array(colors).reshape(-1,3)
 
     fig = plt.figure()
 
@@ -503,12 +506,15 @@ def plot_angles_3d(vectors, image=None, plot_means=True, n_clusters=2, mip=False
     ylabels = ["Y", "Z", "Z"]
     for i in range(3):
         # plot_angles(angles=angles_2d[i], image=I_ortho[i], means=mu[i], axes_coords=axes_coords_list[i], fig=fig, show=False, title=titles[i])
-        plot_angles(angles=angles_2d[i], image=I_ortho[i], means=mu_2d[i], axes_coords=axes_coords_list[i], fig=fig, show=False, title=None, xlabel=xlabels[i], ylabel=ylabels[i], colors=np.abs(mu))
-
+        if vectors is not None:
+            plot_angles(image=I_ortho[i], angles=angles_2d[i], means=mu_2d[i], axes_coords=axes_coords_list[i], fig=fig, show=False, title=None, xlabel=xlabels[i], ylabel=ylabels[i], colors=colors)
+        else:
+            plot_angles(image=I_ortho[i], means=mu_2d[i], axes_coords=axes_coords_list[i], fig=fig, show=False, title=None, xlabel=xlabels[i], ylabel=ylabels[i], colors=colors)
 
     plt.show()
 
     return
+
 
 def transform(S, xS, A, indexing='ij', direction='f'):
     """
