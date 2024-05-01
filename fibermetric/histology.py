@@ -233,6 +233,7 @@ def project_to_plane(vectors, normal, L=None):
     normal : array_like
         A sequence of three scalars defining the normal vector to the plane on which to project the angles.
     L : array_like
+        Linear transform from 3D basis to the new basis in the 2D plane
 
     Returns
     -------
@@ -247,7 +248,7 @@ def project_to_plane(vectors, normal, L=None):
 
     normal = normal / np.sum(normal**2)**0.5 # ensure normal has unit length
     
-    u = np.einsum('...i,i->...', vectors, normal)
+    u = np.einsum('...i,i->...', vectors, normal) 
     u = u[...,None] * normal[None]
     vectors_p = vectors - u
     if L is not None:
@@ -262,95 +263,6 @@ def angle_to_rgb(angle, brightness=1):
     b = np.abs(brightness * np.sin(angle + 4*np.pi/ 3.))
 
     return [r,g,b]
-
-
-def plot_angles(image, angles=None, means=None, ntheta=500, axis=False, axes_coords=[0.1, 0.1, 0.8, 0.8], fig=None, show=True, title=None, xlabel=None, ylabel=None, colors=None):
-    """Plot angles as a polar histogram. This function currently only supports polar (1D) angles.
-
-    Parameters
-    ----------
-        angles : array_like
-            Array of angles. This array will be flattened to create a histogram.
-        image : array_like, optional
-            2D grayscale image array
-        means : sequence of floats, optional
-            The mean or means of angles outputted from k-means clustering.
-        ntheta : int
-            Number of bins in to use for the histogram.
-        axes : bool
-            Show polar axis. Default is False
-    """
-
-    # plot
-    if fig is None:
-        fig = plt.figure()
-
-    ax_image = fig.add_axes(axes_coords)
-    ax_image.imshow(image, cmap='gray', alpha=1)
-    # ax_image.axis('off')  # don't show the axes ticks/lines/etc. associated with the image
-    plt.gca().set_yticklabels([])
-    plt.gca().set_xticklabels([])
-    plt.gca().set_xticks([])
-    plt.gca().set_yticks([])
-    if title is not None:
-        ax_image.set_title(title)
-    if xlabel is not None:
-        ax_image.set_xlabel(xlabel, fontsize=24)
-    if ylabel is not None:
-        ax_image.set_ylabel(ylabel, fontsize=24)
-
-    
-    if angles is not None:
-        angles_flat = angles.flatten()
-        angles_ = np.where(angles_flat<0, angles_flat+np.pi, angles_flat-np.pi)
-        angles_sym = np.concatenate((angles_flat, angles_), axis=0)
-
-        t = np.arange(ntheta+1)*(2*np.pi/ntheta) - np.pi
-        x, _ = np.histogram(angles_sym, t)
-
-        xf = np.fft.rfft(x)
-        n = np.arange(len(xf))
-        xf = xf * np.exp(-0.1*n)
-        xfinv = np.fft.irfft(xf,ntheta+1)
-        xfinv = xfinv / np.sum(xfinv)
-
-        polar_coords = np.array(axes_coords) + np.array([0.05, 0.05, -0.1, -0.1])
-        ax_polar = fig.add_axes(polar_coords, projection = 'polar')
-        ax_polar.patch.set_alpha(0)
-        ax_polar.plot(t, xfinv, 'royalblue', linewidth=8)
-        ax_polar.set_theta_offset(-np.pi/2)
-        ax_polar.set_yticklabels([])
-        ax_polar.grid(False)
-        if not axis:
-            ax_polar.axis('off')
-
-
-    if means is not None:
-        if means.shape==():
-            means = [means]
-        ax_means = fig.add_axes(axes_coords)
-
-        for i,m in enumerate(means):
-            if colors is None:
-                color='lime'
-            elif isinstance(colors[i], (int, float)): # if color is a scalar, treat it as an angle and convert to rgb
-                color = angle_to_rgb(colors[i])
-            elif isinstance(colors[i], (np.ndarray, list, tuple)): # if color is a sequence, treat it as an rgb value.
-                color = np.abs(colors[i])
-                if len(color) != 3:
-                    raise ValueError("The colors must be either scalars or sequences of length 3.")
-                
-            if isinstance(m, (int, float)):
-                m = [np.sin(m), np.cos(m)]
-            ax_means.quiver(0, 0, m[0], -m[1], scale_units='width', scale=3, width=0.02, color=color)
-            ax_means.quiver(0, 0, -m[0], m[1], scale_units='width', scale=3, width=0.02, color=color)
-        ax_means.axis('off')
-
-
-    if show:
-        plt.show()
-
-    return
 
 
 def vec_to_theta(vec):
@@ -422,6 +334,99 @@ def circular_kmeans(angles, n_clusters):
         raise ValueError(f'n_clusters must be greater than or equal to 1, but got {n_clusters}')
     
     return means
+
+
+def plot_angles(image, angles=None, means=None, ntheta=500, axis=False, axes_coords=[0.1, 0.1, 0.8, 0.8], fig=None, show=True, title=None, xlabel=None, ylabel=None, colors=None):
+    """Plot angles as a polar histogram. This function currently only supports polar (1D) angles.
+
+    Parameters
+    ----------
+        angles : array_like
+            Array of angles. This array will be flattened to create a histogram.
+        image : array_like, optional
+            2D grayscale image or rgb image with channels in the last dimension.
+        means : sequence of floats, optional
+            The mean or means of angles outputted from k-means clustering.
+        ntheta : int
+            Number of bins in to use for the histogram.
+        axes : bool
+            Show polar axis. Default is False
+    """
+
+    # plot
+    if fig is None:
+        fig = plt.figure()
+
+    ax_image = fig.add_axes(axes_coords)
+    if len(image.shape) == 2:
+        ax_image.imshow(image, cmap='gray', alpha=1)
+    else:
+        ax_image.imshow(image, alpha=1) # image can have rgb channels
+    # ax_image.axis('off')  # don't show the axes ticks/lines/etc. associated with the image
+    plt.gca().set_yticklabels([])
+    plt.gca().set_xticklabels([])
+    plt.gca().set_xticks([])
+    plt.gca().set_yticks([])
+    if title is not None:
+        ax_image.set_title(title)
+    if xlabel is not None:
+        ax_image.set_xlabel(xlabel, fontsize=24)
+    if ylabel is not None:
+        ax_image.set_ylabel(ylabel, fontsize=24)
+
+    
+    if angles is not None:
+        angles_flat = angles.flatten()
+        angles_ = np.where(angles_flat<0, angles_flat+np.pi, angles_flat-np.pi)
+        angles_sym = np.concatenate((angles_flat, angles_), axis=0)
+
+        t = np.arange(ntheta+1)*(2*np.pi/ntheta) - np.pi
+        x, _ = np.histogram(angles_sym, t)
+
+        xf = np.fft.rfft(x)
+        n = np.arange(len(xf))
+        xf = xf * np.exp(-0.1*n)
+        xfinv = np.fft.irfft(xf,ntheta+1)
+        xfinv = xfinv / np.sum(xfinv)
+
+        polar_coords = np.array(axes_coords) + np.array([0.05, 0.05, -0.1, -0.1])
+        ax_polar = fig.add_axes(polar_coords, projection = 'polar')
+        ax_polar.patch.set_alpha(0)
+        ax_polar.plot(t, xfinv, 'royalblue', linewidth=8)
+        ax_polar.set_theta_offset(-np.pi/2)
+        ax_polar.set_yticklabels([])
+        ax_polar.grid(False)
+        if not axis:
+            ax_polar.axis('off')
+
+
+    if means is not None:
+        if means.shape==():
+            means = [means]
+        ax_means = fig.add_axes(axes_coords)
+
+        for i,m in enumerate(means):
+            if colors is None:
+                color='lime'
+            elif isinstance(colors[i], (int, float)): # if color is a scalar, treat it as an angle and convert to rgb
+                color = angle_to_rgb(colors[i])
+            elif isinstance(colors[i], (np.ndarray, list, tuple)): # if color is a sequence, treat it as an rgb value.
+                color = np.abs(colors[i])
+                if len(color) != 3:
+                    raise ValueError("The colors must be either scalars or sequences of length 3.")
+                
+            if isinstance(m, (int, float)):
+                m = [np.sin(m), np.cos(m)]
+            ax_means.quiver(0, 0, m[0], -m[1], scale_units='width', scale=3, width=0.02, color=color)
+            ax_means.quiver(0, 0, -m[0], m[1], scale_units='width', scale=3, width=0.02, color=color)
+        ax_means.axis('off')
+
+
+    if show:
+        plt.show()
+
+    return
+
 
 def plot_angles_3d(image, vectors=None, plot_means=True, n_clusters=2, mip=False, true_means=None, plot_true_means=True):
     """Plot 3D vector orientations as a histogram in orthogonal views with the optional original image and vector means.

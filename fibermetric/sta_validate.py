@@ -23,28 +23,25 @@ import histology
 import apsym_kmeans
 
 
-def anisotropy_correction(image, dI, labels=None, direction='up', blur=False):
+def anisotropy_correction(image, dI, direction='up', blur=False):
     isotropic = np.all(np.array(dI) == dI[0])
     if not isotropic:
     # downsample all dimensions to largest dimension or upsample to the smallest dimension.
-        if direction == 'down':
-            dim = np.argmax(dI)
-        elif direction == 'up':
-            dim = np.argmin(dI)
-        x = [np.arange(n)*d for n,d in zip(image.shape, dI)]
-        Xout = np.stack(np.meshgrid(*[np.arange(n).astype(float) for n in (image.shape[dim],)*len(dI)], indexing='ij'), axis=-1)
-        image = scipy.interpolate.interpn(points=x, values=image, xi=Xout, method='linear', bounds_error=False, fill_value=None)
+        x_in = [np.arange(n)*d for n,d in zip(image.shape, dI)]
 
-    labels_corrected = None
-    if labels is not None:
-        pass # TODO: fix labels anisotropy correction.
+        if direction == 'down':
+            dx = np.max(dI)
+        elif direction == 'up':
+            dx = np.min(dI)
+
+        x_out = [np.arange(0,n*d, step=dx) for n, d in zip(image.shape, dI)]
+        Xout = np.stack(np.meshgrid(*x_out, indexing='ij'), axis=-1)
+        image = scipy.interpolate.interpn(points=x_in, values=image, xi=Xout, method='linear', bounds_error=False, fill_value=None)
         
-    xI = [(np.arange(n) - (n-1)/2)*d for n,d in zip(image.shape,dI)]
-    extent = (xI[1][0]-dI[1]/2, xI[1][-1]+dI[1]/2, xI[0][-1]+dI[0]/2, xI[0][0]-dI[0]/2) # TODO: generalize for 3D case
     if blur is not False:
         image = gaussian_filter(image, sigma=blur)
     
-    return image, labels_corrected, extent
+    return image
     
 
 def gather(I, patch_size=None):
@@ -194,9 +191,9 @@ def make_phantom(x, angles, period=10, width=1.0, noise=1e-6, crop=None,\
             labels = np.where(np.any(np.all(labels == np.array(angles)[None,None,None], axis=-1), axis=-1), labels, [0.0,0.0])
 
         if blur_correction:
-            I, labels, _ = anisotropy_correction(I, d, labels, blur=blur)
+            I = anisotropy_correction(I, d, labels, blur=blur)
         elif interp:
-            I, labels, _ = anisotropy_correction(I, d, labels)
+            I = anisotropy_correction(I, d, labels)
 
         if crop is not None:
             if crop > 0:
@@ -258,9 +255,9 @@ def make_phantom(x, angles, period=10, width=1.0, noise=1e-6, crop=None,\
             labels = np.where(np.any(labels[...,None] == np.array(angles)[None,None], axis=2), labels, 0.0)
 
         if blur_correction:
-            I, labels, _ = anisotropy_correction(I, d, labels, blur)
+            I = anisotropy_correction(I, d, labels, blur)
         elif interp:
-            I, labels, _ = anisotropy_correction(I, d, labels)
+            I = anisotropy_correction(I, d, labels)
 
         if crop is not None:
             if crop > 0:
