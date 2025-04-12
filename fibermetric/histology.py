@@ -15,14 +15,7 @@ from skimage.transform import resize
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
-import argparse
-import h5py
-from dipy.core.sphere import disperse_charges, Sphere, HemiSphere
-from dipy.reconst.shm import sh_to_sf_matrix
-# from fibermetric.utils import interp, read_matrix_data
-from utils import interp, read_matrix_data
 import apsym_kmeans
-from periodic_kmeans.periodic_kmeans import PeriodicKMeans
 
 
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2,40).__str__()
@@ -158,19 +151,25 @@ def angles(S, cartesian=False):
     Returns
     -------
     angles : ndarray
-        Array of values between -pi/2 and pi/2.
+        For S of shape (...,2,2), returns an array of values between -pi/2 and pi/2.
+        For S of shape (...,3,3), returns an array of shape (...,2) where the first
+        element of the last dimension is the angle from the +z axis with range [0,pi],
+        and the second element is the counterclockwise angle from the +y axis with
+        range [-pi/2, pi/2]. If cartesian == True, the output is an array of the principal
+        eigenvectors of S in x-y-z (col-row-slice) order.
+
     """
     w,v = np.linalg.eigh(S)
     v = v[...,-1] # the principal eigenvector is always the last one since they are ordered by least to greatest eigenvalue.
     # Remember that structure tensors are in x-y-z order (i.e. col-row-slice instead of slice-row-col).
+    if cartesian:
+        return v
+    
     if w.shape[-1] == 2:
-        if cartesian:
-            return v
-        theta = np.arctan(v[...,0] / (v[...,1] + np.finfo(float).eps)) # x/y gives the counterclockwise angle from the vertical direction (y axis).
+        theta = np.arctan(v[...,0] / (v[...,1] + np.finfo(float).eps)) # x/y gives the counterclockwise angle from the vertical direction (y axis). Range [-pi/2, pi/2]
         return theta
+    
     else:
-        if cartesian:
-            return v
         x = v[...,0]
         y = v[...,1]
         z = v[...,2]
@@ -269,24 +268,47 @@ def vec_to_theta(vec):
     return np.arctan(vec[...,0] / (vec[...,1] + np.finfo(float).eps))
 
 
+# def periodic_mean(points, period=180):
+#     period_2 = period/2
+#     if max(points) - min(points) > period_2:
+#         _points = np.array([0 if x > period_2 else 1 for x in points]).reshape(-1,1)
+#         n_left =_points.sum()
+#         n_right = len(points) - n_left
+#         if n_left >0:
+#             mean_left = (points * _points).sum()/n_left
+#         else:
+#             mean_left =0
+#         if n_right >0:
+#             mean_right = (points * (1-_points)).sum() / n_right
+#         else:
+#             mean_right = 0
+#         _mean = (mean_left*n_left+mean_right*n_right+n_left*period)/(n_left+n_right)
+#         return np.array([_mean % period])
+#     else:
+#         return points.mean(axis=0)
+
 def periodic_mean(points, period=180):
-    period_2 = period/2
-    if max(points) - min(points) > period_2:
-        _points = np.array([0 if x > period_2 else 1 for x in points]).reshape(-1,1)
-        n_left =_points.sum()
-        n_right = len(points) - n_left
-        if n_left >0:
-            mean_left = (points * _points).sum()/n_left
+
+    half_period = period/2
+    is_left = np.array([0 if x > half_period else 1 for x in points])
+    
+    n_left = is_left.sum()
+    n_right = len(points) - n_left
+
+    if n_left > 0 and n_right > 0:
+
+        mean_left = (points * is_left).sum() / n_left
+        mean_right = (points * (1-is_left)).sum() / n_right
+
+        if mean_right - mean_left <= period/2:
+            mean = (n_left*mean_left + n_right*mean_right)/len(points)
         else:
-            mean_left =0
-        if n_right >0:
-            mean_right = (points * (1-_points)).sum() / n_right
-        else:
-            mean_right = 0
-        _mean = (mean_left*n_left+mean_right*n_right+n_left*period)/(n_left+n_right)
-        return _mean % period
+            mean = (n_left*(mean_left + period) + n_right*mean_right)/len(points) % period
+    
     else:
-        return points.mean(axis=0)
+        mean = points.sum()/len(points)
+    
+    return mean
 
 
 def spherical_kmeans(vectors, n_clusters, cartesian=True):
@@ -319,21 +341,23 @@ def spherical_kmeans(vectors, n_clusters, cartesian=True):
 
     return means
 
-def circular_kmeans(angles, n_clusters):
 
-    angles = angles.flatten()
-    angles = angles[~np.isnan(angles)]
-    angles = np.where(angles < 0, angles + np.pi, angles) # flip angles to be in the range [0,pi] for periodic kmeans
-    if n_clusters==1:
-        means = periodic_mean(angles[...,None], period=np.pi)
-    elif n_clusters > 1:
-        periodic_kmeans = PeriodicKMeans(angles[...,None], period=np.pi, no_of_clusters=n_clusters)
-        _, _, centers = periodic_kmeans.clustering()
-        means = np.array(centers).squeeze()
-    else:
-        raise ValueError(f'n_clusters must be greater than or equal to 1, but got {n_clusters}')
+# Deprecated: to be removed TODO
+# def circular_kmeans(angles, n_clusters):
+
+#     angles = angles.flatten()
+#     angles = angles[~np.isnan(angles)]
+#     angles = np.where(angles < 0, angles + np.pi, angles) # flip angles to be in the range [0,pi] for periodic kmeans
+#     if n_clusters==1:
+#         means = periodic_mean(angles[...,None], period=np.pi)
+#     elif n_clusters > 1:
+#         periodic_kmeans = PeriodicKMeans(angles[...,None], period=np.pi, no_of_clusters=n_clusters)
+#         _, _, centers = periodic_kmeans.clustering()
+#         means = np.array(centers).squeeze()
+#     else:
+#         raise ValueError(f'n_clusters must be greater than or equal to 1, but got {n_clusters}')
     
-    return means
+#     return means
 
 
 def plot_angles(image, angles=None, means=None, ntheta=500, axis=False, axes_coords=[0.1, 0.1, 0.8, 0.8], fig=None, show=True, title=None, xlabel=None, ylabel=None, colors=None):
@@ -374,7 +398,6 @@ def plot_angles(image, angles=None, means=None, ntheta=500, axis=False, axes_coo
     if ylabel is not None:
         ax_image.set_ylabel(ylabel, fontsize=24)
 
-    
     if angles is not None:
         angles_flat = angles.flatten()
         angles_ = np.where(angles_flat<0, angles_flat+np.pi, angles_flat-np.pi)
@@ -398,7 +421,6 @@ def plot_angles(image, angles=None, means=None, ntheta=500, axis=False, axes_coo
         ax_polar.grid(False)
         if not axis:
             ax_polar.axis('off')
-
 
     if means is not None:
         if means.shape==():
@@ -428,17 +450,16 @@ def plot_angles(image, angles=None, means=None, ntheta=500, axis=False, axes_coo
     return
 
 
-def plot_angles_3d(image, vectors=None, plot_means=True, n_clusters=2, mip=False, true_means=None, plot_true_means=True):
+def plot_angles_3d(image, vectors=None, means=None, mip=False):
     """Plot 3D vector orientations as a histogram in orthogonal views with the optional original image and vector means.
-    TODO: Too many options. Needs to be simplified.
 
     Parameters
     ----------
-    vectors : array_like
-        The sequence of angles as three-dimensional vectors with components along the last axis.
     image : array_like
         3D grayscale image volume array.
-    plot_means : bool, defaults to False.
+    vectors : array_like
+        The sequence of angles as three-dimensional vectors with components along the last axis.
+    means : array_like
 
     """
     if mip:
@@ -466,40 +487,20 @@ def plot_angles_3d(image, vectors=None, plot_means=True, n_clusters=2, mip=False
         for i in range(3):
             angles_2d.append(vec_to_theta(vec_2d[i]))
     
-    mu_2d = []
-    colors = []
-    if plot_means:
-        # compute 3D spherical k-means of vectors
-        mu = spherical_kmeans(vectors, n_clusters=n_clusters) # shape (n_clusters, 3)
+    if means is not None:
+        mu_2d = []
+        colors = []
         # project into orthogonal planes. Resulting shape is (3, n_clusters, 2)
-        for m in mu: # for each mean append the (3,2) array representing one 2d vector per orthogonal plane
+        for m in means: # for each mean append the (3,2) array representing one 2d vector per orthogonal plane
             mu_2d.append([[m[0], m[1]],
                           [m[0], m[2]],
                           [m[1], m[2]]])
-        colors.append(np.abs(mu))
-    
-    if true_means is not None:
-        if plot_true_means:
-            for m in true_means: # for each mean append the (3,2) array representing one 2d vector per orthogonal plane
-                mu_2d.append([[m[0], m[1]],
-                            [m[0], m[2]],
-                            [m[1], m[2]]])
-            colors.append(np.abs(true_means))
-
-        if plot_means: # print error
-            diff = np.empty((len(mu),len(true_means))) # shape (2,2) for two permutations of the difference between two means and two true_thetas
-            for m in range(len(mu)):
-                for n in range(len(true_means)):
-                    diff[m,n] = np.arccos(np.abs(mu[m].dot(true_means[n])))
-            argmax = np.unravel_index(np.argmin(diff), (2,2))
-            corrolary = tuple([1 - x for x in argmax]) # the corresponding cos_dif of the other mu to the other grid_theta
-            error = np.mean([diff[argmax], diff[corrolary]]) * 180/np.pi
-            print(f'mean error (degrees): {error}')
-
-    if plot_means or plot_true_means:
         mu_2d = np.array(mu_2d) # shape (n_clusters, 3, 2)
         mu_2d = np.transpose(mu_2d, (1,0,2)) # shape (3, n_clusters, 2)
-        colors = np.array(colors).reshape(-1,3)
+        colors = np.abs(means)
+    else:
+        mu_2d = [None,None,None]
+        colors = None
 
     fig = plt.figure()
 
@@ -509,8 +510,8 @@ def plot_angles_3d(image, vectors=None, plot_means=True, n_clusters=2, mip=False
     # titles = ["x-y", "x-z", "y-z"]
     xlabels = ["X", "X", "Y"]
     ylabels = ["Y", "Z", "Z"]
+
     for i in range(3):
-        # plot_angles(angles=angles_2d[i], image=I_ortho[i], means=mu[i], axes_coords=axes_coords_list[i], fig=fig, show=False, title=titles[i])
         if vectors is not None:
             plot_angles(image=I_ortho[i], angles=angles_2d[i], means=mu_2d[i], axes_coords=axes_coords_list[i], fig=fig, show=False, title=None, xlabel=xlabels[i], ylabel=ylabels[i], colors=colors)
         else:
@@ -519,472 +520,3 @@ def plot_angles_3d(image, vectors=None, plot_means=True, n_clusters=2, mip=False
     plt.show()
 
     return
-
-
-def transform(S, xS, A, indexing='ij', direction='f'):
-    """
-    Transform structure tensors.
-
-    Parameters
-    ----------
-    S : (...,2,2) array
-        Structure tensor array.
-    xS : list of 1D arrays
-        list of points along each axis.
-    A : array
-        Affine transfrom matrix. May be either one matrix (2,2) or stack of affine matrices (M,2,2).
-    indexing : {'ij', 'xy'}, optional
-        Indexing of transform matrix. Default is 'ij'.
-    direction : {'f', 'b'}, optional
-        Direction of transform. If 'b', the inverse of A is applied.
-
-    Returns
-    -------
-    Sr : (...,2,2) array
-        Registered structure tensor array.
-
-    """
-
-    if S.ndim == 4:
-        xS.insert(0,np.array([0]))
-        S = S[None]
-        A = A[None]
-    S = np.stack((S[...,0,0], S[...,0,1], S[...,1,1]))
-    XS = np.stack(np.meshgrid(xS[0],xS[1], xS[2], indexing='ij'), axis=-1)
-    if indexing == 'xy':
-        A = A[:,[1,0,2]] # first flip the first two rows
-        A = A[:, :, [1,0,2]] # then the first two columns
-    if direction == 'b':
-        A = np.linalg.inv(A)
-    points = (A[:, None, None, :2, :2] @ XS[:A.shape[0], ..., 1:, None])[..., 0] + A[:, None, None, :2, -1]
-    points = points.transpose(-1,0,1,2)
-    points = np.concatenate((np.ones_like(points[0])[None]*xS[0][None,:,None,None], points))
-    Sr = interp(xS, S, points.astype(float))
-    Sr = np.stack((Sr[0],Sr[1],Sr[1],Sr[2]),axis=-1)[0].reshape(Sr.shape[2:]+(2,2))
-
-    return Sr
-
-
-def downsample(S,down):
-    """
-    Downsample structure tensors.
-
-    Parameters
-    ----------
-    S : array
-        Array of structure tensors. Last two dimensons contain 2x2 or 3x3 tensors
-    down : int or list or tuple
-        Downsampling factor.
-    Returns
-    -------
-    S : array
-        Downsampled 
-    """
-
-    S = S.reshape((S.shape[:-2] + (S.shape[-1] * S.shape[-2],)))
-    if S.ndim == 3:
-        if type(down) == int:
-            d0,d1 = down, down
-        else:
-            d0,d1 = down
-        S = resize(S, (S.shape[0]//d0, S.shape[1]//d1, 4), anti_aliasing=True).reshape(S.shape[:-1]+(2,2))
-    elif S.ndim == 4:
-        if type(down) == int:
-            d0,d1,d2 = down,down,down
-        else:
-            d0,d1,d2 = down
-        S = resize(S, (S.shape[0]//d0, S.shape[1]//d1, S.shape[2]//d2, 9), anti_aliasing=True).reshape(S.shape[:-1]+(3,3))
-    return S
-
-    
-def odf2d(theta, nbins, tile_size, damping=0.1):
-    '''
-    Create an array of 2D orientation distribution functions (ODFs) by aggregating the structure tensor angles (theta) into tiles.
-    The odf is modeled as a fourier series fit to the histogram of angles for each tile. The length of the output odf is set to nbins. 
-
-    Parameters
-    ----------
-    theta: numpy Array
-        Two dimensional array of angles. ( range [-pi/2,pi/2] )
-    nbins: int
-        The length of each odf in the output array.
-    tile_size: int
-        The size of the tiles used to aggregate angles. The sample size for each odf will be tile_size^2.
-    damping: int
-        Sets the degree of damping applied to fourier coefficients. Greater damping results in smoother odfs.
-    
-    Returns
-    -------
-    odf: numpy Array
-        array of ODFs with each ODF representing the distribution of angles in a patch of theta with size equal to tile_size^2.
-
-    '''
-    # print('reshaping...')
-    # reshape theta so the last two dimensions are shape (patch_size, patch_size)
-    # it will have to be cropped if the number of pixels on each dimension doesn't divide evenly into patch_size
-    i, j = [x//tile_size for x in theta.shape]
-    theta = np.array(theta[:i*tile_size,:j*tile_size]) # crop so theta divides evenly into tile_size (must create a new array to change stride lengths too.)
-    # reshape into tiles by manipulating strides. (np.reshape preserves contiguity of elements, which we don't want in this case)
-    nbits = theta.strides[-1]
-    theta = np.lib.stride_tricks.as_strided(theta, shape=(i,j,tile_size,tile_size), strides=(tile_size*theta.shape[1]*nbits,tile_size*nbits,theta.shape[1]*nbits,nbits))
-    theta = theta.reshape(i,j,tile_size**2)
-    # print('creating symmetric distribution...')
-    # concatenate a copy of theta but with angles in the opposite direction to make the odfs symmetric (since structure tensors are symmetric).
-    theta_flip = theta - np.pi
-    theta_flip = np.where(theta_flip < -1*np.pi, theta_flip + 2*np.pi, theta_flip)
-    theta = np.concatenate((theta,theta_flip), axis=-1)
-
-    # print('fitting to fourier series...')
-    # t = np.arange(nbins)*2*np.pi/(nbins-1) - np.pi
-    # odf = np.apply_along_axis(lambda a: np.histogram(a, bins=t)[0], axis=-1, arr=theta)
-    odf = np.apply_along_axis(lambda a: np.histogram(a[~np.isnan(a)], bins=nbins, range=(-np.pi,np.pi))[0], axis=-1, arr=theta)
-    step = 2*np.pi/nbins
-    sample_points = np.linspace(-np.pi+step/2, np.pi-step/2, nbins)
-    odf_F = np.fft.rfft(odf)
-    n = np.arange(odf_F.shape[-1])
-    odf_F = odf_F * np.exp(-1*damping*n) # apply damping
-    odf = np.fft.irfft(odf_F, nbins)
-    odf = odf / np.sum(odf, axis=-1)[...,None] # normalize to make this a pdf
-    # print('done')
-
-    return odf, sample_points
-
-
-def odf3d(angles, nbins, tile_size, sh_order=8):
-    '''
-        Create an array of 3D orientation distribution functions (ODFs) by aggregating the structure tensor angles into tiles.
-        The odf is modeled as a spherical harmonic series fit to the histogram of angles for each tile. The length of the output odf is set to nbins. 
-
-        Parameters
-        ----------
-        angles: ndarray
-            (i,j,k,2) array with angles theta (angle w.r.t. polar axis) and phi (azimuthal angle) in the last dimension.
-        nbins: int
-            Number of bins used to create histogram of angles.
-        tile_size: int
-            The size of the tiles used to aggregate angles. The sample size for each odf will be tile_size^3.
-        sh_order: int
-            Sets the largest spherical harmonic order used to fit to the angles.
-        
-        Returns
-        -------
-        sh_signal: ndarray
-            Spherical harmonic signal valued image array. Contains spherical harmonic coefficients in the last dimension.
-
-        '''
-
-    # aggregate angles
-    i, j, k = [x//tile_size for x in angles.shape[:-1]]
-    angles = np.array(angles[:i*tile_size, :j*tile_size, :k*tile_size]) # crop so angles divides evenly into tile_size (must create a new array to change stride lengths too.)
-    # reshape into tiles by manipulating strides. (np.reshape preserves contiguity of elements, which we don't want in this case)
-    nbits = angles.strides[-1]
-    angles = np.lib.stride_tricks.as_strided(angles, shape=(i, j, k, tile_size, tile_size, tile_size, 2),
-                                            strides=(tile_size*angles.shape[1]*angles.shape[2]*nbits,
-                                                    tile_size*angles.shape[2]*nbits,
-                                                    tile_size*nbits,
-                                                    angles.shape[1]*angles.shape[2]*nbits,
-                                                    angles.shape[2]*nbits,
-                                                    nbits, nbits//2))
-    angles = angles.reshape(i * j * k, tile_size**3, 2)
-    # set up approx. evenly distributed histogram bin points by despersing charges on the surface of a sphere.
-    theta = np.pi * np.random.rand(nbins)
-    phi = 2 * np.pi * np.random.rand(nbins)
-    hsph_initial = HemiSphere(theta=theta, phi=phi)
-
-    hsph_updated, potential = disperse_charges(hsph_initial,2)#, const=0.5)
-    while np.abs(potential[-2]-potential[-1]) > 0.1:
-        hsph_updated, pot = disperse_charges(hsph_updated,2)#, const=0.5)
-        potential = np.append(potential,pot)
-
-    vertices = hsph_updated.vertices
-    bins = np.vstack((vertices,-vertices)) # histogram bin centers
-    N = angles.shape[0] * angles.shape[1] * angles.shape[2] # number of voxels
-    signal = np.zeros((N, len(bins)))
-    # fill in the histogram. For each vector, find the distance to all bin centers, choose the closest bin and add one to it
-    for v in angles[:]:
-        dist = np.arccos(np.dot(vertices,v.T))
-        v_idx = np.argmax(np.abs(np.pi/2 - dist), axis=0) # closest or farthest bin from the vector i.e. closest to v or -v
-        signal[:,v_idx] += 1
-        signal[:,v_idx+len(vertices)] += 1
-
-    # fit spherical harmonics to signal
-    sphere = Sphere(xyz=bins)
-    print(f'Building SH matrix of order {sh_order}')
-    B, invB = sh_to_sf_matrix(sphere, sh_order=sh_order)
-    sh_signal = np.dot(signal, invB)
-    sh_signal = sh_signal.reshape(i, j, k, sh_signal[-1])
-
-    return sh_signal
-
-
-# TODO: accept directories to process stacks of images and affines
-def main():
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("image", help="path to image to be used for structure tensor analysis")
-    parser.add_argument("-o", "--out", help="output directory")
-    parser.add_argument("-a", "--all", action="store_true",
-                        help="save out theta, anisotropy index, and hsv with structure tensor")
-    parser.add_argument("-i", "--img_down", type=int, default=0,
-                        help="image downsampling factor applied before structure tensor calculation")
-    parser.add_argument("-s", "--sigma", type=float, default=1,
-                        help="sigma used for gaussian filter on structure tensor")
-    parser.add_argument("-d", "--down", type=int, default=1,
-                        help="structure tensor downsampling factor")
-    parser.add_argument("-p","--pixel_size", nargs="+", type=float, default=1.0, help="pixel dimensions")
-    parser.add_argument("-r", "--reverse_intensity", action="store_true",
-                        help="reverse image intensity, e.g. light on dark to dark on light")
-    parser.add_argument('-A', '--affine', help=".txt file storing rigid 3x3 transformation matrix")
-    args = parser.parse_args()
-    
-    image = args.image
-
-    if args.out:
-        out = args.out
-        if not os.path.exists(out):
-            os.makedirs(out)
-    else:
-        out = os.getcwd()
-    
-
-    img_down = args.img_down
-    sigma = args.sigma
-    down = args.down
-    reverse_intensity = args.reverse_intensity
-
-    I = load_img(image, img_down, reverse_intensity)
-    dI = args.pixel_size
-
-    S = structure_tensor(I, sigma, dI=dI)
-    S = downsample(S, down)
-
-    if args.all==True:
-        theta, AI, hsv = hsv(S, I)
-
-    if args.affine:
-        with open(args.affine, 'rt') as f:
-            A = read_matrix_data(f)
-            nS = S.shape[:-2]
-            if type(dI) == float:
-                dI = np.ones(len(nS))*dI
-            xS = [np.arange(n)*d - (n-1)*d/2.0 for n,d in zip(nS,dI)]
-            S = transform(S, xS, A)
-
-    # save out structure tensor field
-    base = os.path.splitext(os.path.split(image)[1])[0]
-    S_name = base + '_S.h5'
-    with h5py.File(os.path.join(out, S_name), 'w') as f:
-            f.create_dataset('S', data=S)
-
-    # save out images
-    if args.all:
-        name = base + '_theta.png'
-        cv2.imwrite(os.path.join(out, name), (theta*255).astype(np.uint8), [cv2.IMWRITE_PNG_COMPRESSION, 0])
-        name = base + '_AI.png'
-        cv2.imwrite(os.path.join(out, name), (AI*255).astype(np.uint8), [cv2.IMWRITE_PNG_COMPRESSION, 0])
-        name = base + '_hsv.png'
-        cv2.imwrite(os.path.join(out, name), (hsv*255).astype(np.uint8), [cv2.IMWRITE_PNG_COMPRESSION, 0])
-    
-    return
-
-
-if __name__ == "__main__":
-    main()
-
-
-#######################################################################################################################################################################
-# scratch
-#######################################################################################################################################################################
-
-#  TODO: do not keep this function. It is copied from the internet.
-# def vonmises_density(x: np.array, mu: np.array, kappa: np.array) -> np.array:
-#     """
-#     Calculate the von Mises density for a series x (a 1D numpy.array).
-    
-#     Input | Type | Details
-#     -- | -- | --
-#     x | a 1D numpy.array of size L |
-#     mu | a 1D numpy.array of size n | the mean of the von Mises distributions
-#     kappa | a 1D numpy.array of size n | the dispersion of the von Mises distributions
-    
-#     Output : 
-#         a (L x n) numpy array, L is the length of the series, and n is the size of the array containing the parameters. Each row of the output corresponds to a density
-#     """    
-#     not_normalized_density = np.array([np.exp(kappa*np.cos(i-mu)) for i in x])
-#     norm = 2*np.pi*iv(0,kappa)
-#     _density = not_normalized_density/norm
-#     return _density
-
-
-# def vonmises_mixture(thetas, n_components=2, max_iter=100, tol=1e-5, verbose=False):
-#     """
-#     Function to fit a mixture of von mises distributions to a histogram of angles.
-#     """
-#     # initialize parameters
-#     n = len(thetas)
-#     bins = np.linspace(-np.pi, np.pi, n)
-#     # use k-means to initialize mu and kappa
-#     kmeans = KMeans(n_clusters=n_components, random_state=0).fit(thetas.reshape(-1,1))
-#     mu = kmeans.cluster_centers_.reshape(-1)
-#     if verbose:
-#         print('inital means: ', mu)
-#     kappa = np.random.random(n_components)
-#     pi = np.random.random(n_components)
-#     pi = pi / np.sum(pi)
-#     # run EM algorithm
-#     for i in range(max_iter):
-#         # E-step
-#         p = np.zeros((n, n_components)) # p is the posterior probability of each component
-#         # for j in range(n_components):
-#         #     p[:, j] = pi[j] * vonmises_density(bins*2, mu[j]*2, kappa[j]) # multiply by 2 to convert from [-pi/2,pi/2] to [-pi,pi]
-#         p = pi * vonmises_density(bins, mu, kappa) # multiply by 2 to convert from [-pi/2,pi/2] to [-pi,pi]
-#         p = p / np.sum(p, axis=1)[:, None]
-#         if verbose:
-#         # plot the initial posterior probabilities for each class
-#             if i == 0:
-#                 fig,ax = plt.subplots(1,1,subplot_kw=dict(projection='polar'))
-#                 for j in range(n_components):
-#                     ax.plot(bins, p[:,j], label='component {}'.format(j))
-#                 ax.set_title('posterior probabilities')
-#             if i % 1 == 0:
-#                 for j in range(n_components):
-#                     ax.plot(bins, p[:,0], label='component {}'.format(j))
-#                 plt.draw()
-#         # M-step
-#         # pi_new is the mean of the posterior probabilities
-#         pi_new = np.mean(p, axis=0)
-#         # mu_new = np.arctan2(np.sin(thetas) @ p, np.cos(thetas) @ p) / 2 # divide by 2 to convert from [-pi,pi] to [-pi/2,pi/2]
-#         # c = np.cos(thetas) @ (p * np.cos(mu_new*2)) + np.sin(thetas) @ (p * np.sin(mu_new*2))
-#         mu_new = np.arctan2(np.sin(thetas) @ p, np.cos(thetas) @ p)
-#         c = np.cos(thetas) @ (p * np.cos(mu_new)) + np.sin(thetas) @ (p * np.sin(mu_new))
-#         k = lambda kappa: (c - iv(1, kappa) / iv(0, kappa) * np.sum(p, axis=0)).reshape(n_components)
-#         kappa_new = fsolve(k, np.zeros(n_components))
-
-#         # check for convergence
-#         if np.allclose(mu, mu_new, rtol=tol) and np.allclose(kappa, kappa_new, rtol=tol) and np.allclose(pi, pi_new, rtol=tol):
-#             if verbose:
-#                 print(f'Converged after {i+1} iterations.')
-#             break
-#         else:
-#             mu = mu_new
-#             kappa = kappa_new
-#             pi = pi_new
-#     else:
-#         if verbose:
-#             print(f'Did not converge after {max_iter} iterations.')
-#     return mu, kappa, pi
-
-
-# def softmax(x):
-#     e_x = np.exp(x - np.max(x))
-#     return e_x / e_x.sum(axis=0)
-    
-
-# # def _vm_log_likelihood(theta, *data):
-# #     # assert len(theta)%3 == 0, 'theta must be a list of length 3n. For n components, theta must contain mu, kappa, and pi for each component.'
-# #     data = data[0]
-# #     mu = theta[::3]
-# #     kappa = theta[1::3]
-# #     pi = theta[2::3]
-# #     pi_0 = 1-np.sum(pi)
-# #     pi = np.concatenate((pi,[pi_0]))
-# #     pi = softmax(pi)
-# #     p = np.zeros((len(data), len(mu)))
-# #     for i in range(len(mu)):
-# #         p[:,i] = pi[i] * vonmises.pdf(data*2, kappa[i], loc=mu[i]*2)
-# #     prob_total = np.sum(p, axis=1)
-# #     # take the log of the sum of the posterior probabilities
-# #     log_likelihood = np.sum(np.log(prob_total))
-
-# #     return -log_likelihood
-
-# def _vm_log_likelihood(p,theta):
-#     # p are
-#     # p[0] score for cluster 1
-#     # p[1] vonmises 1 mean
-#     # p[2] vonmises 1 std
-#     # p[3] vonmises 2 mean
-#     # p[4] vonmises 2 std
-    
-#     prob0 = 1.0/(1.0 + np.exp(p[0]))
-#     prob1 = 1.0 - prob0
-    
-#     prob = prob0*vonmises.pdf(theta-p[1],kappa=p[2]) + prob1*vonmises.pdf(theta-p[3],kappa=p[4])
-    
-#     return -np.sum(np.log(prob))
-    
-
-# def vm_maximum_likelihood(sample_angles, verbose=False): # currently assumes two components
-#     """
-#     Calculate the maximum likelihood estimate of the von mises mixture model.
-#     """
-#     n_components=2
-#     # initialize parameters using k-means
-#     kmeans = KMeans(n_clusters=n_components, random_state=0).fit(sample_angles.reshape(-1,1))
-#     mu = kmeans.cluster_centers_.reshape(-1)
-#     if verbose:
-#         print('inital means: ', mu)
-#     kappa = np.ones(n_components)
-#     pi = 0.0 # initial score for component 1
-#     theta = [pi, mu[0], kappa[0], mu[1], kappa[1]]
-#     # run the optimization
-#     result = minimize(_vm_log_likelihood, theta, args=sample_angles, method='Nelder-Mead', options={'disp': verbose})
-#     mu = result.x[1::2]
-#     mu = [math.fmod(m,np.pi) for m in mu]
-#     kappa = result.x[2::2]
-#     pi_1 = result.x[0]
-#     pi_2 = 1-pi
-#     pi = [pi_1,pi_2]
-
-#     return mu, kappa, pi
-
-    
-# def odf2d_vonmises(theta, nbins, tile_size, n_components=2, verbose=False):
-#     """   
-#     Create an array of 2D orientation distribution functions (ODFs) by aggregating the structure tensor angles (theta) into tiles.
-#     The odf is modeled as a mixture of von mises distributions fit to the histogram of angles for each tile. The length of the output odf is set to nbins.
-
-#     Parameters
-#     ----------
-#     theta: numpy Array
-#         Two dimensional array of angles. ( range [-pi/2,pi/2] )
-#     nbins: int
-#         The length of each odf in the output array.
-#     tile_size: int
-#         The size of the tiles used to aggregate angles. The sample size for each odf will be tile_size^2.
-#     n_components: int
-#         The number of von mises distributions to fit to each tile. (default=2)
-#     """
-
-#     # print('reshaping...')
-#     # flatten theta so the last two dimensions are shape (patch_size, patch_size)
-#     # it will have to be cropped if the number of pixels on each dimension doesn't divide evenly into patch_size
-#     i, j = [x//tile_size for x in theta.shape]
-#     theta = np.array(theta[:i*tile_size,:j*tile_size]) # crop so theta divides evenly into tile_size (must create a new array to change stride lengths too.)
-#     # reshape into tiles by manipulating strides. (np.reshape preserves contiguity of elements, which we don't want in this case)
-#     nbits = theta.strides[-1]
-#     theta = np.lib.stride_tricks.as_strided(theta, shape=(i,j,tile_size,tile_size), strides=(tile_size*theta.shape[1]*nbits,tile_size*nbits,theta.shape[1]*nbits,nbits))
-#     theta = theta.reshape(i,j,tile_size**2)
-#     odf = np.zeros((theta.shape[0], theta.shape[1], nbins))
-#     mu = np.zeros((theta.shape[0], theta.shape[1], n_components))
-#     kappa = np.zeros((theta.shape[0], theta.shape[1], n_components))
-#     pi = np.zeros((theta.shape[0], theta.shape[1], n_components))
-#     # for each tile, fit a mixture of von mises distributions to the histogram of angles.
-#     # print('fitting to von mises distributions...')
-#     for i in range(theta.shape[0]):
-#         for j in range(theta.shape[1]):
-#             # fit a mixture of von mises distributions to the histogram of angles
-#             # mu, kappa, pi = vonmises_mixture(theta[i,j,:], n_components=n_components, verbose=verbose)
-#             mu_, kappa_, pi_ = vm_maximum_likelihood(theta[i,j,:][~np.isnan(theta[i,j,:])], verbose=verbose)
-#             mu[i,j] = mu_
-#             kappa[i,j] = kappa_
-#             pi[i,j] = pi_
-#             # create an odf from the fitted parameters
-#             for k in range(n_components):
-#                 # odf[i,j,:] += pi[k] * vonmises_density(np.linspace(-np.pi, np.pi, nbins), mu[k]*2, kappa[k]) # multiply mu by 2 to convert from [-pi/2,pi/2] to [-pi,pi]
-#                 odf[i,j,:] += vonmises.pdf(np.linspace(-np.pi, np.pi, nbins), kappa[i,j,k], loc=mu[i,j,k]*2)
-#             odf[i,j,:] = odf[i,j,:] / np.sum(odf[i,j,:]) # normalize to make this a pdf
-#             # print('done')
-        
-            
-#     return odf, mu, kappa, pi
