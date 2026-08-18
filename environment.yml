@@ -507,6 +507,7 @@ dependencies:
       - fpzip==1.2.0
       - frozenlist==1.3.3
       - fury==0.8.0
+      - pot==0.9.6.post1
       - gevent==22.10.2
       - google-api-core==2.11.0
       - google-auth==2.16.0
