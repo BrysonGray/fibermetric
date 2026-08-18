@@ -9,30 +9,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
-import os
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # first we'll make a dataset class
 class DiffusionTensorDataset(Dataset):
-    def __init__(self, img_file, mask_file=None):
-        data = np.fromfile(img_file, dtype=np.float32)
-        I_ = data.reshape(181,6,217,181)
-        self.I = np.zeros((I_.shape[0], I_.shape[2], I_.shape[3],3,3))
-        self.I[...,0,0] = I_[:,2]
-        self.I[...,1,1] = I_[:,1]
-        self.I[...,2,2] = I_[:,0]
-        self.I[...,0,1] = I_[:,5]
-        self.I[...,0,2] = I_[:,4]
-        self.I[...,1,2] = I_[:,3]
-        self.I[...,1,0] = I_[:,5]
-        self.I[...,2,0] = I_[:,4]
-        self.I[...,2,1] = I_[:,3]
-        if mask_file is not None:
-            mask = np.fromfile(mask_file, dtype=np.uint16)
-            mask = mask.reshape(181,217,181)
-            self.I[mask==0] = 0
+    def __init__(self, tensors, mask=None):
+        self.I = np.asarray(tensors, dtype=float).copy()
+        if self.I.ndim != 5 or self.I.shape[-2:] != (3, 3):
+            raise ValueError('tensors must have shape (N, H, W, 3, 3).')
+        if mask is not None:
+            mask = np.asarray(mask)
+            if mask.shape != self.I.shape[:-2]:
+                raise ValueError('mask dimensions must match the tensor image.')
+            self.I[mask == 0] = 0
         self.d,self.v = np.linalg.eigh(self.I) 
 
     def __len__(self):
@@ -188,29 +179,24 @@ def test_loop(model, loss_fn, test_loader, device):
     
     return test_loss, accuracy
 
-def train_unet(input_dir, output_dir, name, mask_dir=None, epochs=100, batch_size=16, learning_rate=1e-4, random_seed=0):
+def train_unet(tensor_images, masks=None, epochs=100, batch_size=16, learning_rate=1e-4, random_seed=0):
     """Train a U-Net model for out-of-plane fiber orientation prediction."""
     # set random seed
     torch.manual_seed(random_seed)
     np.random.seed(random_seed)
 
-    # create output directory
-    os.makedirs(output_dir, exist_ok=True)
-    files = os.listdir(input_dir)
-    files.sort()
-    if mask_dir is not None:
-        masks = [mask for mask in os.listdir(mask_dir) if mask.endswith('.img')]
-        masks.sort()
+    tensor_images = list(tensor_images)
+    if masks is None:
+        masks = [None] * len(tensor_images)
     else:
-        masks = [None]*len(files)
-    dataset = []
-    print('Loading data...')
-    for file, mask in zip(files[:-1], masks[:-1]):
-        image_path = os.path.join(input_dir, file)
-        mask_path = os.path.join(mask_dir, mask) if mask_dir is not None else None
-        dataset.append(DiffusionTensorDataset(image_path, mask_path))
+        masks = list(masks)
+    if len(tensor_images) != len(masks):
+        raise ValueError('tensor_images and masks must contain the same number of images.')
+    dataset = [
+        DiffusionTensorDataset(tensors, mask)
+        for tensors, mask in zip(tensor_images, masks)
+    ]
     dataset = torch.utils.data.ConcatDataset(dataset)
-    print('Done')
     # split dataset into train and test
     train_size = int(0.9 * len(dataset))
     validation_size = len(dataset) - train_size
@@ -238,12 +224,4 @@ def train_unet(input_dir, output_dir, name, mask_dir=None, epochs=100, batch_siz
         scheduler.step(loss)
     print("Done")
 
-    print("Saving...")
-    # save model
-    torch.save(model.state_dict(), os.path.join(output_dir, name + '.pth'))
-    # save losses and accuracies
-    np.save(os.path.join(output_dir, 'losses.npy'), np.array(losses))
-    np.save(os.path.join(output_dir, 'accuracies.npy'), np.array(accuracies))
-    print("Done")
-
-    return model
+    return model, np.asarray(losses), np.asarray(accuracies)

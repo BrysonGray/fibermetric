@@ -3,14 +3,23 @@
 # ruff: noqa: E741
 """Structure tensor validation routines."""
 
+import os
+import pickle
+
 import numpy as np
 import pandas as pd
+import tqdm
 from tqdm.contrib import itertools as tqdm_itertools
 
-from . import periodic_kmeans
 from . import utils
 from .phantoms import make_phantom
+from ..difference_measures.angles import apsym_vector_distance
+from ..difference_measures.angles import multiple_exclusive_distances
+from ..difference_measures.angles import periodic_distance_1d
 from ..orientation_encoding import angles as compute_angles
+from ..orientation_encoding.periodic_kmeans import apsym_kmeans
+from ..orientation_encoding.periodic_kmeans import periodic_kmeans
+from ..orientation_encoding.periodic_kmeans import periodic_mean
 from ..orientation_encoding import structure_tensor
 
 
@@ -43,22 +52,26 @@ def sta_test(I, derivative_sigma, tensor_sigma, true_thetas=None, crop=None, cro
         angle_values = np.where(angle_values < 0, angle_values + np.pi, angle_values)
         if len(true_thetas) == 1:
             x = np.arange(180) * np.pi / 180
-            mu = periodic_kmeans.periodic_mean(angle_values, x, period=np.pi)[None]
+            mu = periodic_mean(angle_values, x, period=np.pi)[None]
         else:
-            mu = periodic_kmeans.periodic_kmeans(angle_values, period=np.pi, k=2)
-        diff = periodic_kmeans.distance(mu, np.array(true_thetas), period=np.pi)
-        diff = periodic_kmeans.multiple_exclusive_distances(diff)
+            mu = periodic_kmeans(angle_values, period=np.pi, k=2)
+        diff = periodic_distance_1d(
+            mu[:, None, None],
+            np.asarray(true_thetas)[None, :, None],
+            period=np.pi,
+        )
+        diff = multiple_exclusive_distances(diff)
         error = np.mean(diff)
     else:
         angle_values = angle_values.reshape(-1, dim)
         true_thetas = utils.sph_to_cart(true_thetas)
         if len(true_thetas) == 1:
-            mu = periodic_kmeans.apsym_kmeans(angle_values, k=1)
+            mu = apsym_kmeans(angle_values, k=1)
             diff = np.arccos(np.abs(mu.dot(true_thetas.T)))
         else:
-            mu = periodic_kmeans.apsym_kmeans(angle_values, k=2)
-            diff = periodic_kmeans.distance_3d(mu, true_thetas)
-            diff = periodic_kmeans.multiple_exclusive_distances(diff)
+            mu = apsym_kmeans(angle_values, k=2)
+            diff = apsym_vector_distance(mu[:, None, :], true_thetas[None, :, :])
+            diff = multiple_exclusive_distances(diff)
             diff = np.mean(diff)
         error = np.mean(diff)
 
@@ -107,3 +120,69 @@ def run_tests(derivative_sigmas, tensor_sigmas, nIs, angles, periods=[10], blur_
                 }
                 error_df = pd.concat((error_df, pd.DataFrame(new_row)), ignore_index=True)
     return error_df
+
+
+def run_from_files(path, output_directory):
+    """Load phantom archives, run STA validation, and write result files."""
+    derivative_sigmas = np.linspace(start=0.15, stop=2.5, num=10)
+    tensor_sigmas = np.linspace(start=0.0, stop=5.0, num=10)
+    if os.path.isdir(path):
+        files = [os.path.join(path, file_name) for file_name in os.listdir(path)]
+    else:
+        files = [path]
+
+    for file_path in tqdm.tqdm(files):
+        archive = np.load(file_path)
+        phantom = archive['image']
+        anisotropy_ratio = archive['AI']
+        period = archive['period']
+        angle = archive['angle']
+
+        if phantom.ndim == 2:
+            if angle.ndim == 0:
+                name = f'error_AI-{anisotropy_ratio:.2f}_period-{period:02d}_theta-{angle:.2f}.p'
+            else:
+                name = f'error_AI-{anisotropy_ratio:.2f}_period-{period:02d}_theta-{angle[0]:.2f}-{angle[1]:.2f}.p'
+        elif angle.ndim == 1:
+            name = f'error_AI-{anisotropy_ratio:.2f}_period-{period:02d}_theta-{angle[0]:.2f}_phi-{angle[1]:.2f}.p'
+        else:
+            name = f'error_AI-{anisotropy_ratio:.2f}_period-{period:02d}_theta-{angle[0, 0]:.2f}-{angle[1, 0]:.2f}_phi-{angle[0, 1]:.2f}-{angle[1, 1]:.2f}.p'
+
+        output_path = os.path.join(output_directory, name)
+        if os.path.exists(output_path):
+            continue
+
+        error_df = pd.DataFrame({
+            'derivative_sigma': [],
+            'tensor_sigma': [],
+            'AI': [],
+            'period': [],
+            'width': [],
+            'angles': [],
+            'error': [],
+        })
+        for derivative_sigma in derivative_sigmas:
+            for tensor_sigma in tensor_sigmas:
+                crop_all = round(max(derivative_sigma, tensor_sigma) * 8 / 3)
+                crop_end = round(float(anisotropy_ratio)) - 1
+                error = sta_test(
+                    phantom,
+                    derivative_sigma,
+                    tensor_sigma,
+                    true_thetas=angle,
+                    crop=crop_all,
+                    crop_end=crop_end,
+                )
+                new_row = {
+                    'derivative_sigma': derivative_sigma,
+                    'tensor_sigma': tensor_sigma,
+                    'AI': anisotropy_ratio,
+                    'period': period,
+                    'width': 1,
+                    'angles': [angle],
+                    'error': error,
+                }
+                error_df = pd.concat((error_df, pd.DataFrame(new_row)), ignore_index=True)
+
+        with open(output_path, 'wb') as handle:
+            pickle.dump(error_df, handle)

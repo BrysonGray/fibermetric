@@ -15,7 +15,7 @@ from .auxiliary.io import save_arrays
 
 def _run_structure_tensor(args):
     """Compute and save the structure tensors of a 2D or 3D image."""
-    from .orientation_encoding.tensors import structure_tensor
+    from .orientation_encoding.structure_tensor_analysis import structure_tensor
 
     result = structure_tensor(
         load_image(args.input, args.key),
@@ -29,14 +29,14 @@ def _run_structure_tensor(args):
 
 def _run_principal_directions(args):
     """Compute and save the principal directions of a 2D or 3D structure tensor field."""
-    from .orientation_encoding.tensors import angles
+    from .orientation_encoding.structure_tensor_analysis import angles
 
     save_array(args.output, angles(load_array(args.input, args.key), cartesian=args.cartesian))
 
 
 def _run_anisotropy(args):
     """Compute and save the anisotropy of a 2D or 3D eigenvalue or tensor field."""
-    from .orientation_encoding.tensors import anisotropy
+    from .orientation_encoding.structure_tensor_analysis import anisotropy
 
     values = load_array(args.input, args.key)
     if args.tensors:
@@ -50,6 +50,7 @@ def _run_2d_directions_to_circular_odf(args):
 
     coefficients = circular_odf(
         load_array(args.input, args.key),
+        shape_out=args.shape_out,
         ntheta=args.ntheta,
         n_coeffs=args.n_coeffs,
         decay=args.decay,
@@ -65,6 +66,7 @@ def _run_3d_directions_to_spherical_odf(args):
     coefficients = spherical_odf(
         load_array(args.input, args.key),
         coordinates=args.coordinates,
+        shape_out=args.shape_out,
         sh_order_max=args.sh_order_max,
         normalize=not args.no_normalize,
     )
@@ -95,8 +97,36 @@ def _run_spherical_odf_to_histogram(args):
     )
     save_arrays(args.output, histogram=histogram, vertices=np.asarray(sphere.vertices))
 
+
+def _run_circular_odf_directions(args):
+    """Compute and save principal axes from circular ODF coefficients."""
+    from .orientation_encoding.directions import circular_odf_directions
+
+    directions = circular_odf_directions(
+        load_array(args.input, args.key),
+        max_directions=args.max_directions,
+        relative_threshold=args.relative_threshold,
+        ntheta=args.ntheta,
+        chunk_size=args.chunk_size,
+    )
+    save_array(args.output, directions)
+
+
+def _run_spherical_odf_directions(args):
+    """Compute and save principal axes from spherical ODF coefficients."""
+    from .orientation_encoding.directions import spherical_odf_directions
+
+    directions = spherical_odf_directions(
+        load_array(args.input, args.key),
+        max_directions=args.max_directions,
+        relative_threshold=args.relative_threshold,
+        sh_order_max=args.sh_order_max,
+        chunk_size=args.chunk_size,
+    )
+    save_array(args.output, directions)
+
 def _run_spherical_kmeans(args):
-    from .auxiliary.periodic_kmeans import apsym_kmeans
+    from .orientation_encoding.periodic_kmeans import apsym_kmeans
 
     vectors = np.asarray(load_array(args.input, args.key), dtype=float)
     vectors = vectors.reshape((-1, vectors.shape[-1])).copy()
@@ -115,7 +145,7 @@ def _run_spherical_kmeans(args):
 
 
 def _run_circular_kmeans(args):
-    from .auxiliary.periodic_kmeans import periodic_kmeans
+    from .orientation_encoding.periodic_kmeans import periodic_kmeans
 
     result = periodic_kmeans(
         load_array(args.input, args.key),
@@ -127,31 +157,71 @@ def _run_circular_kmeans(args):
 
 
 def _run_transform_tensors(args):
-    from .registration.transform import transform_tensors_with_displacement
+    from .transform import transform_tensors_with_displacement
 
-    result = transform_tensors_with_displacement(args.tensors, args.displacement, args.original)
+    result = transform_tensors_with_displacement(
+        load_array(args.tensors, args.tensors_key),
+        load_array(args.displacement, args.displacement_key),
+    )
     save_array(args.output, result)
 
 
 def _run_sh_to_cf(args):
-    from .registration.transform import sh_to_cf
-    from .registration.transform import sh_to_cf_numeric
+    from .transform import sh_to_cf
 
     signal = load_array(args.input, args.key)
-    if args.numeric:
-        result = sh_to_cf_numeric(signal, args.directions, args.bins, norm=not args.no_normalize)
-        save_array(args.output, result)
-        return
-    if args.source is None:
-        raise ValueError('--source is required unless --numeric is used.')
-    circular, sample_points = sh_to_cf(signal, args.directions, args.source)
-    save_arrays(args.output, circular_function=circular, sample_points=sample_points)
+    circular, azimuth = sh_to_cf(
+        signal,
+        ndir=args.directions,
+        nbins=args.bins,
+        normalize=not args.no_normalize,
+        sh_order_max=args.sh_order_max,
+    )
+    save_arrays(args.output, circular_function=circular, azimuth=azimuth)
 
 
 def _run_transform_sh(args):
-    from .registration.transform import transform_sh_img
+    from .transform import transform_sh_img
 
-    result = transform_sh_img(load_array(args.input), load_array(args.jacobian))
+    result = transform_sh_img(
+        load_array(args.input, args.key),
+        load_array(args.displacement, args.displacement_key),
+    )
+    save_array(args.output, result)
+
+
+def _run_odf_distance(args):
+    if args.representation == 'circular':
+        from .difference_measures import circular_odf_distance
+
+        result = circular_odf_distance(
+            load_array(args.first, args.first_key),
+            load_array(args.second, args.second_key),
+            metric=args.metric,
+            ntheta=args.ntheta,
+            chunk_size=args.chunk_size,
+        )
+    else:
+        from .difference_measures import spherical_odf_distance
+
+        result = spherical_odf_distance(
+            load_array(args.first, args.first_key),
+            load_array(args.second, args.second_key),
+            metric=args.metric,
+            sh_order_max=args.sh_order_max,
+            chunk_size=args.chunk_size,
+        )
+    save_array(args.output, result)
+
+
+def _run_tensor_distance(args):
+    from .difference_measures import tensor_distance
+
+    result = tensor_distance(
+        load_array(args.first, args.first_key),
+        load_array(args.second, args.second_key),
+        metric=args.metric,
+    )
     save_array(args.output, result)
 
 
@@ -177,30 +247,39 @@ def _run_make_phantom(args):
 
 
 def _run_sta_tests(args):
-    from .auxiliary.run_sta_tests import main
+    from .auxiliary.sta_tests import run_from_files
 
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
-    main(args.input, str(output))
+    run_from_files(args.input, str(output))
 
 
 def _run_train_unet(args):
+    import torch
+
+    from .auxiliary.io import load_raw_dti
+    from .auxiliary.io import load_raw_mask
     from .prediction.unet import train_unet
 
-    train_unet(
-        input_dir=args.input,
-        output_dir=args.output,
-        name=args.name,
-        mask_dir=args.masks,
+    input_files = sorted(path for path in Path(args.input).iterdir() if path.is_file())
+    tensor_images = [load_raw_dti(path) for path in input_files]
+    masks = None
+    if args.masks is not None:
+        mask_files = sorted(path for path in Path(args.masks).iterdir() if path.suffix == '.img')
+        masks = [load_raw_mask(path) for path in mask_files]
+    model, losses, accuracies = train_unet(
+        tensor_images,
+        masks=masks,
         epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         random_seed=args.random_seed,
     )
-
-
-def _unavailable(args):
-    raise NotImplementedError(f'The {args.command} checklist function is not implemented yet.')
+    output = Path(args.output)
+    output.mkdir(parents=True, exist_ok=True)
+    torch.save(model.state_dict(), output / f'{args.name}.pth')
+    save_array(output / 'losses.npy', losses)
+    save_array(output / 'accuracies.npy', accuracies)
 
 
 def _add_array_io(parser, input_help='Input .npy or .npz file.'):
@@ -238,6 +317,7 @@ def build_parser():
 
     command = commands.add_parser('2d-directions-to-circular-odf', help='2D directions -> Fourier coefficients.')
     _add_array_io(command)
+    command.add_argument('--shape-out', nargs='+', type=int, help='Spatial output shape; omit to pool all directions.')
     command.add_argument('--ntheta', type=int, default=500)
     command.add_argument('--n-coeffs', type=int)
     command.add_argument('--decay', type=float, default=0.1)
@@ -246,6 +326,7 @@ def build_parser():
 
     command = commands.add_parser('3d-directions-to-spherical-odf', help='3D directions -> SH coefficients.')
     _add_array_io(command)
+    command.add_argument('--shape-out', nargs='+', type=int, help='Spatial output shape; omit to pool all directions.')
     command.add_argument(
         '--coordinates',
         choices=('cartesian', 'spherical'),
@@ -270,6 +351,22 @@ def build_parser():
     command.add_argument('--allow-negative', action='store_true')
     command.set_defaults(handler=_run_spherical_odf_to_histogram)
 
+    command = commands.add_parser('circular-odf-directions', help='Circular ODF coefficients -> principal axes.')
+    _add_array_io(command)
+    command.add_argument('--max-directions', type=int, default=3)
+    command.add_argument('--relative-threshold', type=float, default=0.1)
+    command.add_argument('--ntheta', type=int, default=500)
+    command.add_argument('--chunk-size', type=int, default=1024)
+    command.set_defaults(handler=_run_circular_odf_directions)
+
+    command = commands.add_parser('spherical-odf-directions', help='SH ODF coefficients -> principal axes.')
+    _add_array_io(command)
+    command.add_argument('--max-directions', type=int, default=3)
+    command.add_argument('--relative-threshold', type=float, default=0.1)
+    command.add_argument('--sh-order-max', type=int, default=8)
+    command.add_argument('--chunk-size', type=int, default=1024)
+    command.set_defaults(handler=_run_spherical_odf_directions)
+
     command = commands.add_parser('circular-kmeans', help='Cluster periodic 1D directions.')
     _add_array_io(command)
     command.add_argument('-k', '--clusters', type=int, required=True)
@@ -284,24 +381,26 @@ def build_parser():
     command.set_defaults(handler=_run_spherical_kmeans)
 
     command = commands.add_parser('transform-tensors', help='Transform a DTI field with a displacement field.')
-    command.add_argument('tensors', help='Input tensor NIfTI file.')
-    command.add_argument('displacement', help='Input displacement NIfTI file.')
-    command.add_argument('original', help='Original image NIfTI file.')
+    command.add_argument('tensors', help='Input tensor .npy or .npz file.')
+    command.add_argument('displacement', help='Input displacement .npy or .npz file.')
     command.add_argument('output', help='Output transformed tensor .npy file.')
+    command.add_argument('--tensors-key', help='Tensor array key when input is an .npz archive.')
+    command.add_argument('--displacement-key', help='Displacement array key when input is an .npz archive.')
     command.set_defaults(handler=_run_transform_tensors)
 
-    command = commands.add_parser('transform-sh', help='Transform spherical harmonic coefficients.')
-    command.add_argument('input', help='Spherical harmonic image .npy file.')
-    command.add_argument('jacobian', help='Jacobian field .npy file.')
+    command = commands.add_parser('transform-sh', help='Transform an SH image with a displacement field.')
+    command.add_argument('input', help='Spherical harmonic image .npy or .npz file.')
+    command.add_argument('displacement', help='Input displacement .npy or .npz file.')
     command.add_argument('output', help='Output transformed SH .npy file.')
+    command.add_argument('--key', help='SH array key when input is an .npz archive.')
+    command.add_argument('--displacement-key', help='Displacement array key when input is an .npz archive.')
     command.set_defaults(handler=_run_transform_sh)
 
     command = commands.add_parser('sh-to-cf', help='3D SH ODF -> 2D circular function.')
     _add_array_io(command)
     command.add_argument('--directions', type=int, default=100)
     command.add_argument('--bins', type=int, default=64)
-    command.add_argument('--source', help='Directory for symbolic basis cache.')
-    command.add_argument('--numeric', action='store_true')
+    command.add_argument('--sh-order-max', type=int, default=8)
     command.add_argument('--no-normalize', action='store_true')
     command.set_defaults(handler=_run_sh_to_cf)
 
@@ -335,12 +434,27 @@ def build_parser():
     command.add_argument('--random-seed', type=int, default=0)
     command.set_defaults(handler=_run_train_unet)
 
-    for name, help_text in (
-        ('tensor-distance', 'Compare tensor fields (not implemented).'),
-        ('odf-distance', 'Compare ODF fields (not implemented).'),
-    ):
-        command = commands.add_parser(name, help=help_text)
-        command.set_defaults(handler=_unavailable)
+    command = commands.add_parser('odf-distance', help='Compare circular or spherical ODF images.')
+    command.add_argument('first', help='First ODF .npy or .npz file.')
+    command.add_argument('second', help='Second ODF .npy or .npz file.')
+    command.add_argument('output', help='Output distance image .npy file.')
+    command.add_argument('--first-key', help='First array key when input is an .npz archive.')
+    command.add_argument('--second-key', help='Second array key when input is an .npz archive.')
+    command.add_argument('--representation', choices=('circular', 'spherical'), required=True)
+    command.add_argument('--metric', choices=('total_variation', 'wasserstein'), required=True)
+    command.add_argument('--ntheta', type=int, default=500)
+    command.add_argument('--sh-order-max', type=int, default=8)
+    command.add_argument('--chunk-size', type=int, default=1024)
+    command.set_defaults(handler=_run_odf_distance)
+
+    command = commands.add_parser('tensor-distance', help='Compare SPD tensor images.')
+    command.add_argument('first', help='First tensor .npy or .npz file.')
+    command.add_argument('second', help='Second tensor .npy or .npz file.')
+    command.add_argument('output', help='Output distance image .npy file.')
+    command.add_argument('--first-key', help='First array key when input is an .npz archive.')
+    command.add_argument('--second-key', help='Second array key when input is an .npz archive.')
+    command.add_argument('--metric', choices=('riemannian', 'symmetric_kl'), required=True)
+    command.set_defaults(handler=_run_tensor_distance)
 
     return parser
 

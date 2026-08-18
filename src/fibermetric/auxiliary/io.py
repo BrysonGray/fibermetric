@@ -101,3 +101,21 @@ def load_odf(path):
             image = nib.load(os.path.join(path, file_name))
             signals.append(image.get_fdata())
     return np.array(signals)
+
+
+def load_raw_dti(path, shape=(181, 6, 217, 181)):
+    """Load a component-first raw diffusion tensor image."""
+    components = np.fromfile(path, dtype=np.float32).reshape(shape)
+    tensors = np.zeros((shape[0], shape[2], shape[3], 3, 3), dtype=np.float32)
+    tensors[..., 0, 0] = components[:, 2]
+    tensors[..., 1, 1] = components[:, 1]
+    tensors[..., 2, 2] = components[:, 0]
+    tensors[..., 0, 1] = tensors[..., 1, 0] = components[:, 5]
+    tensors[..., 0, 2] = tensors[..., 2, 0] = components[:, 4]
+    tensors[..., 1, 2] = tensors[..., 2, 1] = components[:, 3]
+    return tensors
+
+
+def load_raw_mask(path, shape=(181, 217, 181)):
+    """Load a raw unsigned 16-bit image mask."""
+    return np.fromfile(path, dtype=np.uint16).reshape(shape)

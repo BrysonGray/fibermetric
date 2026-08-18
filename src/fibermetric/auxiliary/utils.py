@@ -70,49 +70,49 @@ def draw(image, xJ=None, **kwargs):
     return plt.gca()
 
 
-def gather(I, patch_size=None):
-    """ Gather I into patches.
+def gather(values, out_shape, feature_axis=None):
+    """Gather a spatial array into equal non-overlapping bins.
 
-        Parameters
-        ----------
-        I : three or four-dimensional array with last dimension of size n_features
-
-        patch_size : int, or {list, tuple} of length I.ndim
-            The side length of each patch
-
-        Returns
-        -------
-        I_patches : four or five-dimensional array with samples aggregated in the second
-            to last dimension and the last dimension has size n_features.
+    Spatial edges are cropped symmetrically when needed. Set ``feature_axis``
+    to ``-1`` to preserve a final feature axis after the gathered sample axis.
     """
-    if patch_size is None:
-        patch_size = [I.shape[1] // 10] * (I.ndim-1) # default to ~100 tiles in an isostropic image
-    elif isinstance(patch_size, int):
-        patch_size = [patch_size] * (I.ndim-1)
-    n_features = I.shape[-1]
-    if I.ndim == 3:
-        i, j = [x//patch_size[i] for i,x in enumerate(I.shape[:2])]
-        I_patches = I[:i*patch_size[0],:j*patch_size[1]].copy() # crop so 'I' divides evenly into patch_size (must create a new array to change stride lengths)
-        # reshape into patches by manipulating strides. (np.reshape preserves contiguity of elements, which we don't want in this case)
-        nbits = I_patches.strides[-1]
-        I_patches = np.lib.stride_tricks.as_strided(I_patches, shape=(i,j,patch_size[0],patch_size[1],n_features),
-                                                    strides=(patch_size[0]*I_patches.shape[1]*n_features*nbits,
-                                                             patch_size[1]*n_features*nbits,
-                                                             I_patches.shape[1]*n_features*nbits,
-                                                             n_features*nbits,
-                                                             nbits))
-        I_patches = I_patches.reshape(i,j,np.prod(patch_size),n_features)
-    elif I.ndim == 4:
-        i, j, k = [x//patch_size[i] for i,x in enumerate(I.shape[:3])]
-        I_patches = np.array(I[:i*patch_size[0], :j*patch_size[1], :k*patch_size[2]])
-        nbits = I_patches.strides[-1]
-        I_patches = np.lib.stride_tricks.as_strided(I_patches, shape=(i, j, k, patch_size[0], patch_size[1], patch_size[2], n_features),
-                                                strides=(patch_size[0]*I_patches.shape[1]*I_patches.shape[2]*n_features*nbits,
-                                                        patch_size[1]*I_patches.shape[2]*n_features*nbits,
-                                                        patch_size[2]*n_features*nbits,
-                                                        I_patches.shape[1]*I_patches.shape[2]*n_features*nbits,
-                                                        I_patches.shape[2]*n_features*nbits,
-                                                        n_features*nbits,
-                                                        nbits))
-        I_patches = I_patches.reshape(i,j,k,np.prod(patch_size),n_features)
-    return I_patches
+    values = np.asarray(values)
+    out_shape = tuple(int(size) for size in out_shape)
+    if feature_axis not in (None, -1):
+        raise ValueError('feature_axis must be None or -1.')
+
+    spatial_shape = values.shape if feature_axis is None else values.shape[:-1]
+    if len(out_shape) != len(spatial_shape):
+        raise ValueError('out_shape must have one value per spatial dimension.')
+    if any(size < 1 for size in out_shape):
+        raise ValueError('out_shape values must be positive.')
+
+    bin_shape = tuple(size // output for size, output in zip(spatial_shape, out_shape))
+    if any(size < 1 for size in bin_shape):
+        raise ValueError('out_shape cannot exceed the input spatial shape.')
+    cropped_shape = tuple(output * size for output, size in zip(out_shape, bin_shape))
+    starts = tuple((size - cropped) // 2 for size, cropped in zip(spatial_shape, cropped_shape))
+    slices = tuple(slice(start, start + cropped) for start, cropped in zip(starts, cropped_shape))
+    if feature_axis == -1:
+        slices += (slice(None),)
+    cropped = np.ascontiguousarray(values[slices])
+
+    interleaved_shape = tuple(
+        dimension
+        for output, size in zip(out_shape, bin_shape)
+        for dimension in (output, size)
+    )
+    if feature_axis == -1:
+        interleaved_shape += values.shape[-1:]
+    gathered = cropped.reshape(interleaved_shape)
+
+    spatial_axes = tuple(range(0, 2 * len(out_shape), 2))
+    sample_axes = tuple(range(1, 2 * len(out_shape), 2))
+    axes = spatial_axes + sample_axes
+    if feature_axis == -1:
+        axes += (2 * len(out_shape),)
+    gathered = gathered.transpose(axes)
+    sample_count = int(np.prod(bin_shape))
+    if feature_axis == -1:
+        return gathered.reshape(out_shape + (sample_count, values.shape[-1]))
+    return gathered.reshape(out_shape + (sample_count,))

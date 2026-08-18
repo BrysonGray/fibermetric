@@ -51,15 +51,35 @@ def structure_tensor(image, derivative_sigma=1.0, tensor_sigma=1.0, normalize=Tr
 
 def anisotropy(eigenvalues):
     """Calculate anisotropy from 2D or 3D eigenvalues."""
-    if eigenvalues.shape[-1] == 3:
-        eigenvalues = eigenvalues.transpose(3, 0, 1, 2)
-        trace = np.sum(eigenvalues, axis=0)
-        anisotropy_values = np.sqrt((3 / 2) * (np.sum((eigenvalues - (1 / 3) * trace) ** 2, axis=0) / np.sum(eigenvalues ** 2, axis=0)))
-        anisotropy_values = np.nan_to_num(anisotropy_values)
-        return anisotropy_values / np.max(anisotropy_values)
-    if eigenvalues.shape[-1] == 2:
-        return abs(eigenvalues[..., 0] - eigenvalues[..., 1]) / abs(eigenvalues[..., 0] + eigenvalues[..., 1])
-    raise Exception(f'Accepts 2 or 3 eigenvalues but found {eigenvalues.shape[-1]}')
+    eigenvalues = np.asarray(eigenvalues, dtype=float)
+    if eigenvalues.ndim < 1 or eigenvalues.shape[-1] not in (2, 3):
+        count = eigenvalues.shape[-1] if eigenvalues.ndim else 0
+        raise ValueError(f'Accepts 2 or 3 eigenvalues but found {count}')
+
+    count = eigenvalues.shape[-1]
+    if count == 2:
+        numerator = np.abs(eigenvalues[..., 0] - eigenvalues[..., 1])
+        denominator = np.abs(eigenvalues[..., 0] + eigenvalues[..., 1])
+        return np.divide(
+            numerator,
+            denominator,
+            out=np.zeros_like(numerator),
+            where=denominator > np.finfo(float).eps,
+        )
+
+    mean = np.mean(eigenvalues, axis=-1, keepdims=True)
+    numerator = np.sum((eigenvalues - mean) ** 2, axis=-1)
+    denominator = np.sum(eigenvalues ** 2, axis=-1)
+    values = np.sqrt(
+        np.divide(
+            1.5 * numerator,
+            denominator,
+            out=np.zeros_like(numerator),
+            where=denominator > np.finfo(float).eps,
+        )
+    )
+    maximum = np.max(values, initial=0.0)
+    return values / maximum if maximum > np.finfo(float).eps else values
 
 
 def angles(tensors, cartesian=False):
@@ -95,17 +115,20 @@ def angles(tensors, cartesian=False):
 
 
 def hsv(tensors, image):
-    """Compute orientation, anisotropy, and an RGB visualization from 2D tensors."""
+    """Compute orientation, anisotropy, and an RGB tensor visualization."""
     import matplotlib
 
-    if image.ndim != 2:
-        raise Exception(f'Only accepts two dimensional images but found {image.ndim} dimensions')
+    tensors = np.asarray(tensors, dtype=float)
+    image = np.asarray(image, dtype=float)
+    if tensors.shape[-2:] != (2, 2):
+        raise ValueError('tensors must end with shape (2, 2).')
+    if image.ndim != tensors.ndim - 2:
+        raise ValueError('image rank must match the tensor spatial rank.')
     eigenvalues, eigenvectors = np.linalg.eigh(tensors)
     vectors = eigenvectors[..., -1]
-    theta = ((np.arctan(vectors[..., 1] / vectors[..., 0])) + np.pi / 2) / np.pi
+    theta = np.mod(np.arctan2(vectors[..., 1], vectors[..., 0]), np.pi) / np.pi
     anisotropy_values = anisotropy(eigenvalues)
     if tensors.shape[:-2] != image.shape:
-        down = [x // y for x, y in zip(image.shape, tensors.shape[:-2])]
-        image = resize(image, (image.shape[0] // down[0], image.shape[1] // down[1]), anti_aliasing=True)
+        image = resize(image, tensors.shape[:-2], anti_aliasing=True)
     stack = np.stack([theta, anisotropy_values, image], -1)
     return theta, anisotropy_values, matplotlib.colors.hsv_to_rgb(stack)
